@@ -1,6 +1,6 @@
 # <img src="src/cua_jev/ui/static/logo-mark.svg" width="44" alt="ZJU-REAL Lab logo"> CUA-JEV: Jev for Computer Use
 
-Cloud development checkpoint: [persistent desktop contracts and workbench proposal](docs/CLOUD_HANDOFF_2026-10-14.md). Run the local UI and open `/workbench` for the clearly labeled interaction prototype.
+Cloud development checkpoint: [persistent desktop contracts and connected workbench](docs/CLOUD_BRIDGE_2026-10-14.md). Run the local UI and open `/workbench` for the backend-connected controlled browser workbench (simulated model API responses).
 
 [Webpage](https://zjureal.com/CUA-JEV/) · [Watch demos](https://zjureal.com/CUA-JEV/#windows-cases) · [中文文档](README.zh-CN.md)
 

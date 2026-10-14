@@ -43,3 +43,23 @@ def test_browser_focus_loss_blocks_input():
     with pytest.raises(RuntimeError, match="lost focus"):
         screen.click_point(20, 20)
     assert screen.inputs == []
+
+
+@pytest.mark.parametrize("operation", ["click", "hotkey", "text"])
+def test_each_browser_input_checks_deadline_before_emission(operation):
+    class Page:
+        def is_closed(self):
+            return False
+
+    def expired():
+        raise RuntimeError("wall budget exhausted")
+
+    screen = BrowserScreen(Page(), before_input=expired)
+    with pytest.raises(RuntimeError, match="wall budget exhausted"):
+        if operation == "click":
+            screen.click_point(1, 1)
+        elif operation == "hotkey":
+            screen.hotkey("ctrl", "a")
+        else:
+            screen.paste_text("not emitted")
+    assert screen.inputs == []

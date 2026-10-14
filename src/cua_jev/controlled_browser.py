@@ -6,6 +6,7 @@ mouse/keyboard input at freshly measured control bounds. No network is needed.
 from __future__ import annotations
 
 import io
+from collections.abc import Callable
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
@@ -75,8 +76,9 @@ class BrowserWindow:
 
 
 class BrowserScreen:
-    def __init__(self, page: Any) -> None:
+    def __init__(self, page: Any, *, before_input: Callable[[], None] | None = None) -> None:
         self.page = page
+        self._before_input = before_input or (lambda: None)
         self.focused = True
         self.inputs: list[dict[str, Any]] = []
 
@@ -86,16 +88,19 @@ class BrowserScreen:
 
     def click_point(self, x: float, y: float) -> None:
         self.ensure_foreground(1)
+        self._before_input()
         self.page.mouse.click(x, y)
         self.inputs.append({"operation": "click", "x": x, "y": y})
 
     def hotkey(self, *keys: str) -> None:
         self.ensure_foreground(1)
+        self._before_input()
         self.page.keyboard.press("+".join("Control" if key == "ctrl" else key for key in keys))
         self.inputs.append({"operation": "hotkey", "keys": list(keys)})
 
     def paste_text(self, value: str) -> None:
         self.ensure_foreground(1)
+        self._before_input()
         self.page.keyboard.insert_text(value)
         self.inputs.append({"operation": "text", "length": len(value)})
 

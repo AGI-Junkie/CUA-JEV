@@ -77,7 +77,7 @@ class ControlledSessionManager:
     def create(self, payload: dict[str, Any]):
         if not isinstance(payload, dict):
             raise ValueError("session body must be an object")
-        allowed = {"task", "context", "note_text", "layout", "mode"}
+        allowed = {"task", "context", "note_text", "layout", "mode", "observe_mode"}
         if self.__class__.__name__ == "TestSessionManager":
             allowed.add("_test_faults")
         if set(payload) - allowed:
@@ -95,6 +95,8 @@ class ControlledSessionManager:
             raise ValueError("context must be text <=4000 characters")
         if payload.get("layout", "columns") not in {"columns", "stacked"}:
             raise ValueError("unsupported controlled layout")
+        if payload.get("observe_mode", "dom") not in {"dom", "mock_vision"}:
+            raise ValueError("Unsupported observation mode")
         with self._lock:
             if any(s.state["status"] not in TERMINAL for s in self._sessions.values()):
                 raise ValueError(
@@ -168,6 +170,7 @@ class _Session:
             "context": payload.get("context", ""),
             "note_text": payload["note_text"],
             "layout": payload.get("layout", "columns"),
+            "observe_mode": payload.get("observe_mode", "dom"),
             "mode": "controlled_mock",
             "scope_confirmed": False,
             "scene": None,
@@ -187,6 +190,10 @@ class _Session:
                 "cost": "No paid calls; real API cost unknown",
             },
         }
+        if self.state["observe_mode"] == "mock_vision":
+            self.state["capabilities"]["observer"] = (
+                "Actual screenshot through vision API adapter; DOM-derived model response simulated"
+            )
         # Faults are test-only HTTP fixture inputs, bounded and never external.
         self.faults = (
             payload.get("_test_faults", {}) if manager.__class__.__name__ == "TestSessionManager" else {}
@@ -218,8 +225,10 @@ class _Session:
                 file.write(json.dumps(event, ensure_ascii=False) + "\n")
 
     def status(self, status, **values):
-        self.update(status=status, **values)
-        self.event("lifecycle", {"status": status, **values})
+        # State cannot become terminal before its final factual lifecycle event.
+        with self.lock:
+            self.update(status=status, **values)
+            self.event("lifecycle", {"status": status, **values})
 
     def command(self, action, payload):
         with self.lock:
@@ -313,7 +322,12 @@ class _Session:
                 page.route("**/*", lambda route: route.abort())
                 page.set_content((self.manager.root / "fixtures/controlled_browser/task.html").read_text())
                 page.evaluate("layout => document.body.dataset.layout = layout", self.state["layout"])
-                screen = BrowserScreen(page)
+                def before_input():
+                    if ledger is None:
+                        raise RuntimeError("Input requires a started, confirmed session")
+                    ledger.check()
+
+                screen = BrowserScreen(page, before_input=before_input)
                 if self.faults.get("no_effect"):
                     page.evaluate("document.querySelector('#save').onclick = () => {}")
                 if self.faults.get("lost_focus"):
@@ -335,12 +349,19 @@ class _Session:
                         supplied = json.loads(body["messages"][-1]["content"])
                         controls = {c["name"]: c["ref"] for c in supplied["snapshot"]["controls"]}
                         note = self.state["note_text"]
+                        save_ref = controls["Save local note"]
+                        if self.state["observe_mode"] == "mock_vision":
+                            targets = [target for target in supplied["snapshot"]["visual_targets"]
+                                       if target["label"] == "Save local note"]
+                            if len(targets) != 1:
+                                raise RuntimeError("No unambiguous fresh visual save target")
+                            save_ref = targets[0]["ref"]
                         raw = {
                             "subgoal": "Fill and save the requested note in the controlled lab",
                             "options": [
                                 {"ref": controls["Note text"], "operation": "fill", "value": note},
                                 {
-                                    "ref": controls["Save local note"],
+                                    "ref": save_ref,
                                     "operation": "click",
                                     "expected": {"kind": "text_contains", "value": f"Saved locally: {note}"},
                                 },
@@ -387,8 +408,12 @@ class _Session:
                         },
                     )
 
-                planner_client = httpx.Client(transport=httpx.MockTransport(lambda r: handler("planner", r)))
-                jev_client = httpx.Client(transport=httpx.MockTransport(lambda r: handler("jev", r)))
+                planner_client = httpx.Client(
+                    transport=httpx.MockTransport(lambda r: handler("planner", r)), trust_env=False
+                )
+                jev_client = httpx.Client(
+                    transport=httpx.MockTransport(lambda r: handler("jev", r)), trust_env=False
+                )
                 roles = self.configuration.roles if self.configuration else {}
                 planner_role = roles.get("planner")
                 jev_role = roles.get("jev")
@@ -412,6 +437,21 @@ class _Session:
                     sleep=lambda _: None,
                 )
 
+                vision = None
+                if self.state["observe_mode"] == "mock_vision":
+                    from .configuration import ModelRoleConfig
+                    from .session_vision import create_mock_vision
+
+                    def reserve_vision(role):
+                        if ledger is None:
+                            raise RuntimeError("Vision requires a started, confirmed session")
+                        ledger.record_model_attempt(role)
+
+                    vision, vision_client = create_mock_vision(
+                        page, roles.get("vision") or ModelRoleConfig(), reserve_vision, self.event
+                    )
+                    clients.append(vision_client)
+
                 def make_task():
                     goal = (
                         f"{self.state['task']}\nContext: {self.state['context']}\n"
@@ -427,6 +467,9 @@ class _Session:
                         allow_text_input=True,
                         allow_button_actions=True,
                         contract_path=self.directory / "plan.json",
+                        vision_grounder=vision, vision_mode="always",
+                        allow_screenshot_upload=vision is not None,
+                        allow_visual_clicks=vision is not None,
                     )
 
                 task = make_task()
@@ -459,7 +502,24 @@ class _Session:
                     )
 
                 runtime = bind_runtime()
-                preview = task.observe([])
+
+                def capture_counters():
+                    if ledger is None:
+                        return {}
+                    return {
+                        **ledger.public(),
+                        "planner": {"calls": planner.planning_calls,
+                                    "attempts": planner.planning_attempts,
+                                    "latency_ms": planner.planning_wall_ms},
+                        "jev": dict(policy.metrics), "runtime": dict(runtime.metrics),
+                        "vision": {"attempts": vision.vision_attempts if vision else 0,
+                                   "failures": task.vision_failures,
+                                   "calls": vision.vision_calls if vision else 0,
+                                   "latency_ms": vision.vision_wall_ms if vision else 0},
+                        "model_timing_complete": not runtime.policy_request_pending,
+                    }
+
+                preview = task.observe([], vision=False)
                 self.update(scene=preview.state)
                 self.event("observation", preview.to_dict())
                 self.frame(page)
@@ -476,9 +536,11 @@ class _Session:
                         if action == "stop":
                             browser.close()
                             browser = None
+                            self.update(counters=capture_counters())
                             self.status("stopped", command_pending=None)
                             return
                         if action == "pause":
+                            self.update(counters=capture_counters())
                             self.status("paused")
                         elif action == "takeover":
                             self.status("takeover")
@@ -499,7 +561,7 @@ class _Session:
                             task.reset()
                             history = []
                             runtime = bind_runtime()
-                            preview = task.observe([])
+                            preview = task.observe([], vision=False)
                             self.update(scene=preview.state)
                             self.event("observation", preview.to_dict())
                             self.frame(page)
@@ -507,7 +569,7 @@ class _Session:
                         elif action in {"reobserve", "replan"}:
                             if action == "replan":
                                 task.reset()
-                            observation = task.observe(history)
+                            observation = task.observe(history, vision=False)
                             self.update(scene=observation.state, error=None)
                             self.event("observation", observation.to_dict())
                             self.frame(page)
@@ -546,23 +608,12 @@ class _Session:
                         attempt_indices["jev"] = 0
                         step = runtime.step(observation, candidates)
                         history.append(step)
-                        self.update(
-                            counters={
-                                **ledger.public(),
-                                "planner": {
-                                    "calls": planner.planning_calls,
-                                    "attempts": planner.planning_attempts,
-                                    "latency_ms": planner.planning_wall_ms,
-                                },
-                                "jev": dict(policy.metrics),
-                                "runtime": dict(runtime.metrics),
-                            }
-                        )
+                        self.update(counters=capture_counters())
                         self.frame(page)
                         selected = next(c for c in candidates if c.id == step.decision.candidate_id)
                         evaluation = task.evaluate(observation, selected, step.receipt, step.verification)
                         refreshed = task.observe(history)
-                        self.update(scene=refreshed.state)
+                        self.update(scene=refreshed.state, counters=capture_counters())
                         self.event("observation", refreshed.to_dict())
                         if not step.receipt.success or not step.verification.passed:
                             raise RuntimeError(
@@ -588,18 +639,7 @@ class _Session:
                             # Queue owns terminal acknowledgement; never revive a stopped generation.
                             continue
                         self.control.pause()
-                        self.update(
-                            counters={
-                                **ledger.public(),
-                                "jev": dict(policy.metrics),
-                                "planner": {
-                                    "calls": planner.planning_calls,
-                                    "attempts": planner.planning_attempts,
-                                    "latency_ms": planner.planning_wall_ms,
-                                },
-                                "runtime": dict(runtime.metrics),
-                            }
-                        )
+                        self.update(counters=capture_counters())
                         self.event("error", {"type": type(exc).__name__, "message": str(exc)[:300]})
                         self.status("paused", error=str(exc)[:300])
         except Exception as exc:

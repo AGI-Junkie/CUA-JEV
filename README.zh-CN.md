@@ -1,6 +1,6 @@
 # <img src="src/cua_jev/ui/static/logo-mark.svg" width="44" alt="ZJU-REAL Lab logo"> CUA-JEV: Jev for Computer Use
 
-云端开发检查点：[持久桌面计划与工作台提案](docs/CLOUD_HANDOFF_2026-10-14.md)。启动本地 UI 后打开 `/workbench` 查看明确标注的交互原型。
+云端开发检查点：[持久桌面计划与真实后端工作台](docs/CLOUD_BRIDGE_2026-10-14.md)。启动本地 UI 后打开 `/workbench` 查看已连接后端的受控浏览器工作台（模型 API 响应模拟）。
 
 [项目网页](https://zjureal.com/CUA-JEV/) · [观看 Demo](https://zjureal.com/CUA-JEV/#windows-cases) · [English README](README.md)
 

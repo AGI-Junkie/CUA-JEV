@@ -50,6 +50,10 @@ class AgentRuntime:
         self._policy_lock = threading.Lock()
         self.metrics = {"policy_calls": 0, "policy_errors": 0, "policy_latency_ms": 0.0}
 
+    @property
+    def policy_request_pending(self) -> bool:
+        return self._policy_lock.locked()
+
     def _choose(self, observation, candidates):
         from .open_browser import PublicDecisionPolicy
 

@@ -1,7 +1,9 @@
 """Real Chromium integration; MockTransport replaces only model HTTP responses."""
 
+import importlib.util
 import json
 import os
+import shutil
 import time
 from pathlib import Path
 
@@ -11,6 +13,10 @@ from cua_jev.ui.configuration import ConfigurationStore
 from cua_jev.ui.sessions import ControlledSessionManager
 
 ROOT = Path(__file__).resolve().parents[1]
+pytestmark = pytest.mark.skipif(
+    not shutil.which("chromium") or importlib.util.find_spec("playwright") is None,
+    reason="requires local Chromium and Playwright; no browser downloads in tests",
+)
 
 
 class TestSessionManager(ControlledSessionManager):
@@ -129,11 +135,16 @@ def test_stop_late_jev_never_dispatches(manager):
     start(manager, sid)
     wait(manager, sid, "running")
     end = time.monotonic() + 6
-    while not any(e["type"] == "candidates" for e in manager.events(sid)["events"]):
+    while manager._sessions[sid].ledger.public()["attempts_by_role"].get("jev", 0) < 1:
         assert time.monotonic() < end
         time.sleep(0.01)
     manager.command(sid, "stop")
-    wait(manager, sid, "stopped")
+    stopped = wait(manager, sid, "stopped")
+    assert stopped["counters"]["model_attempts"] == 2
+    assert stopped["counters"]["attempts_by_role"] == {"planner": 1, "jev": 1}
+    assert stopped["counters"]["jev"]["calls"] == 1
+    assert stopped["counters"]["steps"] == 0
+    assert "model_timing_complete" in stopped["counters"]
     time.sleep(0.1)
     assert not any(e["type"] == "receipt" for e in manager.events(sid)["events"])
 
@@ -318,3 +329,43 @@ def test_arbitrary_target_overrides_are_rejected(manager):
 def test_session_private_directory(manager):
     sid = create(manager)
     assert (manager.directory / sid).stat().st_mode & 0o777 == 0o700
+
+
+@pytest.mark.parametrize("layout", ["columns", "stacked"])
+def test_real_screenshot_mock_vision_selects_and_verifies_visual_click(manager, layout):
+    sid = create(manager, layout=layout, observe_mode="mock_vision")
+    assert not [e for e in manager.events(sid)["events"] if e["type"] == "vision_mock"]
+    assert manager.get(sid)["counters"] == {}  # Preview never calls models before scope consent.
+    start(manager, sid)
+    state = wait(manager, sid, "completed")
+    events = manager.events(sid)["events"]
+    vision_events = [e for e in events if e["type"] == "vision_mock"]
+    assert vision_events and all(e["data"]["pixel_sha256"] for e in vision_events)
+    receipts = [e["data"] for e in events if e["type"] == "receipt"]
+    assert receipts[-1]["capability"] == "desktop.visual_click"
+    assert all(e["data"]["passed"] for e in events if e["type"] == "verification")
+    assert state["counters"]["attempts_by_role"]["vision"] == len(vision_events)
+    assert state["counters"]["vision"]["calls"] == len(vision_events)
+    assert state["counters"]["planner"]["calls"] == 1
+    assert state["counters"]["jev"]["calls"] == 2
+    assert state["observe_mode"] == "mock_vision"
+    assert "simulated" in state["capabilities"]["observer"]
+    trace = (manager.directory / sid / "events.jsonl").read_text()
+    assert "data:image" not in trace
+
+
+def test_vision_budget_refusal_is_visible_and_dom_verifies_completed_effect(manager):
+    manager.configuration.update({"limits": {"max_model_attempts": 7}})
+    sid = create(manager, observe_mode="mock_vision")
+    start(manager, sid)
+    state = wait(manager, sid, "completed")
+    counters = state["counters"]
+    assert counters["model_attempts"] == 7
+    assert counters["vision"]["failures"] == 1
+    assert counters["vision"]["calls"] == counters["attempts_by_role"]["vision"] == 4
+    assert counters["vision"]["attempts"] == 5  # Last invocation refused before transport work.
+    events = manager.events(sid)["events"]
+    assert len([e for e in events if e["type"] == "receipt"]) == 2
+    completion = next(e for e in events if e["type"] == "completion")
+    assert completion["data"]["observer"] == "live DOM"
+    assert completion["data"]["actual"] == "Saved locally: Distinct user note 中文"

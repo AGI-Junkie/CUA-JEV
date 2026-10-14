@@ -1,5 +1,7 @@
 # CUA-JEV cloud development handoff · 2026-10-14
 
+> Historical first checkpoint. The real backend bridge, configuration, budgets and updated evidence are delivered in [the current cloud bridge record](CLOUD_BRIDGE_2026-10-14.md). Simulation-only UI statements below describe the earlier checkpoint.
+
 ## Repository and environment
 
 Work was performed only in `/workspace/CUA-JEV`, in the selected cloud execution environment. `git fetch origin main` verified the remote main at `f22e41e24f8eaca09888862aa115c0d28ee7eb91`; the initial local `work` branch was clean at that commit. Development branch: `feat/persistent-jev-workbench`. No push, PR, merge or deployment was performed. The user's Windows checkout was not accessed.

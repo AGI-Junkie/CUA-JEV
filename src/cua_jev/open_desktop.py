@@ -455,8 +455,8 @@ class OpenDesktopTask:
                 self._visual_image = None
         return snapshot
 
-    def observe(self, history: Sequence[StepResult]) -> Observation:
-        self._snapshot = self._capture(vision=True)
+    def observe(self, history: Sequence[StepResult], *, vision: bool = True) -> Observation:
+        self._snapshot = self._capture(vision=vision)
         lease = self._window_lease
         self.scene_state = SceneState(
             self._snapshot.window_handle, self._snapshot.fingerprint(),
