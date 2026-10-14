@@ -1,0 +1,22 @@
+{
+  "source": "actual Chromium render at FastAPI /workbench with CSP",
+  "mode": "UI simulation only",
+  "checks": [
+    "scope required",
+    "scope revocation cancels dispatch",
+    "layout A completion",
+    "layout B completion",
+    "pause cancels delayed callbacks",
+    "stop cancels delayed callbacks",
+    "takeover invalidates scope",
+    "focus loss recovery",
+    "stale frame recovery",
+    "timeout recovery",
+    "no-effect recovery",
+    "keys cleared",
+    "history read-only",
+    "mobile no horizontal overflow",
+    "no browser page errors"
+  ],
+  "page_errors": []
+}
