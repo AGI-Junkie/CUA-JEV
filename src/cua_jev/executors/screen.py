@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..errors import CapabilityUnavailable
+from ..safety import WindowLease
 from ..vision import WindowImage
 
 
@@ -90,9 +91,52 @@ class ScreenController:
     @staticmethod
     def ensure_foreground(handle: int) -> None:
         """Fail closed if another window has focus before a visual capture/click."""
-        foreground = int(ctypes.windll.user32.GetForegroundWindow())
+        get_foreground = ctypes.windll.user32.GetForegroundWindow
+        get_foreground.restype = ctypes.c_void_p
+        foreground = int(get_foreground() or 0)
         if foreground != int(handle):
             raise RuntimeError("selected window is not foreground")
+
+    def capture_window_lease(self, handle: int) -> WindowLease:
+        """Read OS identity and geometry without changing foreground focus."""
+        user32 = ctypes.windll.user32
+        user32.IsWindow.argtypes = [ctypes.c_void_p]
+        user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+        if not user32.IsWindow(int(handle)):
+            raise RuntimeError("selected window no longer exists")
+        self.ensure_foreground(handle)
+        process_id = ctypes.c_ulong()
+        user32.GetWindowThreadProcessId(int(handle), ctypes.byref(process_id))
+        # RECT uses Windows LONG (32 bits even on a 64-bit process).
+        class Rect(ctypes.Structure):
+            _fields_ = [(name, ctypes.c_int32) for name in ("left", "top", "right", "bottom")]
+        user32.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(Rect)]
+        rect = Rect()
+        if not user32.GetWindowRect(int(handle), ctypes.byref(rect)):
+            raise RuntimeError("cannot inspect selected window geometry")
+        dpi_fn = getattr(user32, "GetDpiForWindow", None)
+        if dpi_fn is None:
+            raise CapabilityUnavailable("Windows DPI inspection is unavailable")
+        dpi_fn.argtypes = [ctypes.c_void_p]
+        dpi_fn.restype = ctypes.c_uint
+        dpi = int(dpi_fn(int(handle)))
+        if not dpi or not process_id.value:
+            raise RuntimeError("cannot inspect selected window identity or DPI")
+        return WindowLease(int(handle), int(process_id.value),
+                           (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top), dpi)
+
+    def validate_window_lease(self, lease: WindowLease, *, max_age_s: float = 30) -> None:
+        lease.validate(self.capture_window_lease(lease.handle), max_age_s=max_age_s)
+
+    def guarded_click_point(self, lease: WindowLease, x: float, y: float) -> None:
+        lease.validate_point(x, y)
+        self.validate_window_lease(lease)
+        pyautogui, _ = self._modules()
+        pyautogui.moveTo(round(x), round(y), duration=self.move_s)
+        # The foreground/geometry can change while moving the pointer.
+        self.validate_window_lease(lease)
+        pyautogui.click()
+        time.sleep(self.pause_s)
 
     def move_point(self, x: float, y: float) -> None:
         pyautogui, _ = self._modules()

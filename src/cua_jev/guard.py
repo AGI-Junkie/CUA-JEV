@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from .errors import GuardRejected
-from .models import ActionCandidate, Decision, Observation, Risk
+from .models import ActionCandidate, Channel, Decision, Observation, Risk
 
 
 class ActionGuard:
@@ -17,8 +18,12 @@ class ActionGuard:
         allow_writes: bool = False,
         allow_destructive: bool = False,
         confirmed_candidates: Sequence[str] = (),
+        max_observation_age_s: float = 30,
         precondition_evaluator: Callable[[str, Observation, ActionCandidate], bool] | None = None,
     ) -> None:
+        if max_observation_age_s <= 0:
+            raise ValueError("observation maximum age must be positive")
+        self.max_observation_age_s = max_observation_age_s
         self.allowed_roots = tuple(Path(path).resolve() for path in allowed_roots)
         self.allow_writes = allow_writes
         self.allow_destructive = allow_destructive
@@ -40,6 +45,10 @@ class ActionGuard:
         if len(matches) != 1:
             raise GuardRejected("decision does not identify one offered candidate")
         candidate = matches[0]
+        if candidate.channel == Channel.GUI or candidate.capability.startswith("desktop."):
+            age = time.time() - observation.created_at
+            if not 0 <= age <= self.max_observation_age_s:
+                raise GuardRejected("GUI observation expired; observe again")
         if candidate.requires_confirmation and candidate.id not in self.confirmed_candidates:
             raise GuardRejected("candidate requires explicit confirmation")
         if candidate.risk == Risk.LOCAL_WRITE and not self.allow_writes:

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import queue
+import threading
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from .errors import GuardRejected
+from .errors import GuardRejected, PolicyError
 from .guard import ActionGuard
 from .models import ActionCandidate, ActionReceipt, Decision, Observation, Verification
-from .policy import DecisionPolicy
+from .policy import DecisionPolicy, JevPolicy
 from .registry import ExecutorRegistry
+from .safety import RuntimeControl
 from .trace import JsonlTrace
 from .verify import VerifierRegistry
 
@@ -28,17 +32,74 @@ class AgentRuntime:
         executors: ExecutorRegistry,
         verifiers: VerifierRegistry | None = None,
         trace: JsonlTrace | None = None,
+        control: RuntimeControl | None = None,
+        require_jev: bool = False,
+        decision_timeout_s: float | None = None,
     ) -> None:
         self.policy = policy
         self.guard = guard
         self.executors = executors
         self.verifiers = verifiers or VerifierRegistry()
         self.trace = trace or JsonlTrace()
+        self.control = control or RuntimeControl()
+        self.require_jev = require_jev
+        if decision_timeout_s is not None and decision_timeout_s <= 0:
+            raise ValueError("decision timeout must be positive")
+        self.decision_timeout_s = decision_timeout_s
+        self._policy_lock = threading.Lock()
+        self.metrics = {"policy_calls": 0, "policy_errors": 0, "policy_latency_ms": 0.0}
+
+    def _choose(self, observation, candidates):
+        from .open_browser import PublicDecisionPolicy
+
+        policy = self.policy.inner if isinstance(self.policy, PublicDecisionPolicy) else self.policy
+        if self.require_jev and not isinstance(policy, JevPolicy):
+            raise PolicyError("this run requires the Jev API policy")
+        if not self._policy_lock.acquire(blocking=False):
+            raise PolicyError("previous policy request still outstanding; wait before retrying")
+        worker_started = False
+        started = time.perf_counter()
+        self.metrics["policy_calls"] += 1
+        try:
+            if self.decision_timeout_s is None:
+                decision = self.policy.choose(observation, candidates)
+            else:
+                results = queue.Queue(maxsize=1)
+
+                def choose():
+                    try:
+                        results.put((True, self.policy.choose(observation, candidates)))
+                    except Exception as exc:
+                        results.put((False, exc))
+                    finally:
+                        self._policy_lock.release()
+
+                threading.Thread(target=choose, daemon=True).start()
+                worker_started = True
+                try:
+                    success, value = results.get(timeout=self.decision_timeout_s)
+                except queue.Empty:
+                    raise PolicyError("decision API deadline exceeded; no action executed") from None
+                if not success:
+                    raise value
+                decision = value
+            if self.require_jev and ("fallback" in decision.model.casefold()
+                                     or "rule" in decision.model.casefold()):
+                raise PolicyError("Jev fallback decision rejected; no action executed")
+            return decision
+        except Exception:
+            self.metrics["policy_errors"] += 1
+            raise
+        finally:
+            if not worker_started:
+                self._policy_lock.release()
+            self.metrics["policy_latency_ms"] += (time.perf_counter() - started) * 1000
 
     def step(self, observation: Observation, candidates: Sequence[ActionCandidate]) -> StepResult:
+        generation = self.control.token()
         self.trace.append("observation", observation.to_dict())
         self.trace.append("candidates", {"items": [candidate.to_dict() for candidate in candidates]})
-        decision = self.policy.choose(observation, candidates)
+        decision = self._choose(observation, candidates)
         self.trace.append("decision", decision.to_dict())
         exchange = getattr(self.policy, "last_exchange", None)
         if exchange:
@@ -69,7 +130,8 @@ class AgentRuntime:
                 "checks": ["fresh_observation", "offered_candidate", "risk", "paths", "preconditions"],
             },
         )
-        receipt = self.executors.execute(candidate, observation.observation_id, decision.decision_id)
+        with self.control.dispatch(generation):
+            receipt = self.executors.execute(candidate, observation.observation_id, decision.decision_id)
         self.trace.append("receipt", receipt.to_dict())
         verification = self.verifiers.verify(candidate, receipt)
         self.trace.append("verification", verification.to_dict())

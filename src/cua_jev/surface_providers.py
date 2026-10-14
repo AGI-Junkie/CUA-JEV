@@ -187,7 +187,7 @@ class WindowsUiaSurface:
     ) -> ActionReceipt:
         if candidate.channel == Channel.GUI:
             snapshot = self.task.capture_state()
-            self.task.screen.focus_handle(snapshot.window_handle, maximize=False)
+            self.task.screen.ensure_foreground(snapshot.window_handle)
         return self.task(candidate, observation_id, decision_id)
 
     def register_verifiers(self, registry: VerifierRegistry) -> None:
