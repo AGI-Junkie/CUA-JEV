@@ -1,0 +1,29 @@
+name: Actions event diagnostic
+
+"on":
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# This probe neither checks out code nor calls actions/APIs. A successful run
+# only establishes event delivery and runner availability, never CI acceptance.
+permissions: {}
+
+jobs:
+  event_delivery:
+    name: Actions event delivery only
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Record nonsecret event identifiers
+        shell: bash
+        env:
+          DIAGNOSTIC_EVENT: ${{ github.event_name }}
+          DIAGNOSTIC_SHA: ${{ github.sha }}
+          DIAGNOSTIC_REF: ${{ github.ref }}
+          DIAGNOSTIC_WORKFLOW_REF: ${{ github.workflow_ref }}
+        run: |
+          test -n "$DIAGNOSTIC_SHA"
+          printf 'event=%s\nsha=%s\nref=%s\nworkflow_ref=%s\n' \
+            "$DIAGNOSTIC_EVENT" "$DIAGNOSTIC_SHA" \
+            "$DIAGNOSTIC_REF" "$DIAGNOSTIC_WORKFLOW_REF"
