@@ -60,7 +60,8 @@ def run_layout(browser, layout: str, output: Path) -> dict:
     planner = SimulatedPlanner()
     task = OpenDesktopTask(goal=f"Save local note {NOTE}", window_title_re="Local task lab",
                            planner=planner, window=BrowserWindow(page), screen=screen,
-                           allow_text_input=True, allow_button_actions=True)
+                           allow_text_input=True, allow_button_actions=True,
+                           contract_path=output / f"{layout}-plan.json")
     requests = []
 
     def simulated_jev(request):
@@ -86,7 +87,8 @@ def run_layout(browser, layout: str, output: Path) -> dict:
     trace_path.write_text("", encoding="utf-8")
     trace = JsonlTrace(trace_path)
     runtime = AgentRuntime(policy=policy, guard=ActionGuard(allow_writes=True, allow_destructive=True),
-                           executors=executors, verifiers=verifiers, trace=trace)
+                           executors=executors, verifiers=verifiers, trace=trace,
+                           require_jev=True, decision_timeout_s=5)
     history = []
     task.reset()
     page.screenshot(path=str(output / f"{layout}-before.png"), full_page=True)
@@ -117,6 +119,10 @@ def run_layout(browser, layout: str, output: Path) -> dict:
     assert actual == f"Saved locally: {NOTE}", actual
     assert planner.calls == 1, "layout changes must reuse one persistent plan"
     assert len(history) == 2, "expected independently verified fill and click"
+    assert policy.metrics["calls"] == len(history)
+    assert policy.metrics["attempts"] == len(requests)
+    assert policy.metrics["latency_ms"] > 0
+    assert runtime.metrics["policy_calls"] == len(history)
     final_bounds = next(c.rectangle for c in task.capture_state().controls if c.name == "Save local note")
     assert final_bounds != first_bounds
     page.screenshot(path=str(output / f"{layout}-after.png"), full_page=True)
@@ -127,6 +133,9 @@ def run_layout(browser, layout: str, output: Path) -> dict:
               "planner_calls": planner.calls, "planner_latency_ms": round(planner.latency_ms, 3),
               "jev_logical_calls": len(history), "jev_transport_attempts": len(requests),
               "jev_latency_ms": [round(s.decision.latency_ms, 3) for s in history],
+              "policy_metrics": policy.metrics.copy(), "runtime_metrics": runtime.metrics.copy(),
+              "require_jev": True, "decision_timeout_s": 5,
+              "plan_contract_file": f"{layout}-plan.json",
               "elapsed_ms": round((time.perf_counter() - started) * 1000, 3),
               "verified_steps": len(history), "independent_dom_postcondition": actual,
               "mouse_keyboard_inputs": screen.inputs, "api_choices": requests,

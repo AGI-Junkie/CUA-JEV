@@ -23,6 +23,11 @@ def test_two_layouts_real_input_reuses_plan(tmp_path):
         assert layout["planner_calls"] == 1
         assert layout["jev_logical_calls"] == layout["jev_transport_attempts"] == 2
         assert layout["verified_steps"] == 2
+        assert layout["require_jev"] is True
+        assert layout["elapsed_ms"] > 0
+        assert layout["policy_metrics"]["calls"] == 2
+        assert layout["policy_metrics"]["attempts"] == 2
+        assert (tmp_path / layout["plan_contract_file"]).is_file()
         assert layout["paid_api_calls"] == layout["external_network_requests"] == 0
         assert layout["first_button_bounds"] != layout["final_button_bounds"]
         assert (tmp_path / f"{layout['initial_layout']}-after.png").is_file()
