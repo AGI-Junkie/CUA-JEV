@@ -8,10 +8,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
+import time
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any, Protocol
 
+from .desktop_contracts import FreshCandidateCompiler, PlanContract, SceneState, verify_postcondition
 from .episode import Evaluation
 from .errors import CapabilityUnavailable
 from .executors.common import execute_with_receipt
@@ -72,8 +76,10 @@ class DesktopSnapshot:
                     continue
                 rectangle = wrapper.rectangle()
                 bounds = (
-                    int(rectangle.left), int(rectangle.top),
-                    int(rectangle.right), int(rectangle.bottom),
+                    int(rectangle.left),
+                    int(rectangle.top),
+                    int(rectangle.right),
+                    int(rectangle.bottom),
                 )
                 if bounds[2] <= bounds[0] or bounds[3] <= bounds[1]:
                     continue
@@ -94,10 +100,15 @@ class DesktopSnapshot:
                     continue
                 ref = f"c{index}"
                 control = DesktopControl(
-                    ref=ref, index=index, name=name, control_type=control_type,
+                    ref=ref,
+                    index=index,
+                    name=name,
+                    control_type=control_type,
                     automation_id=str(getattr(info, "automation_id", "") or "")[:120],
-                    enabled=bool(wrapper.is_enabled()), rectangle=bounds,
-                    can_invoke=can_invoke, can_set_text=can_set_text,
+                    enabled=bool(wrapper.is_enabled()),
+                    rectangle=bounds,
+                    can_invoke=can_invoke,
+                    can_set_text=can_set_text,
                 )
                 controls.append(control)
                 handles[ref] = wrapper
@@ -106,26 +117,33 @@ class DesktopSnapshot:
             except Exception:
                 continue
         snapshot = cls(
-            window_title=str(window.window_text())[:160], window_handle=int(window.handle),
-            text="\n".join(text_parts)[:1600], controls=tuple(controls),
+            window_title=str(window.window_text())[:160],
+            window_handle=int(window.handle),
+            text="\n".join(text_parts)[:1600],
+            controls=tuple(controls),
             edit_values=tuple(edit_values[:20]),
         )
         return snapshot, handles
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "window_title": self.window_title, "window_handle": self.window_handle,
-            "text": self.text, "controls": [item.to_dict() for item in self.controls],
+            "window_title": self.window_title,
+            "window_handle": self.window_handle,
+            "text": self.text,
+            "controls": [item.to_dict() for item in self.controls],
             "visual_targets": [item.to_dict() for item in self.visual_targets],
             "visual_summary": self.visual_summary,
             "visual_text": list(self.visual_text),
-            "visual_region": self.visual_region, "visual_image_hash": self.visual_image_hash,
+            "visual_region": self.visual_region,
+            "visual_image_hash": self.visual_image_hash,
         }
 
     def uia_fingerprint(self) -> str:
         state = {
-            "window_title": self.window_title, "window_handle": self.window_handle,
-            "text": self.text, "controls": [item.to_dict() for item in self.controls],
+            "window_title": self.window_title,
+            "window_handle": self.window_handle,
+            "text": self.text,
+            "controls": [item.to_dict() for item in self.controls],
             "edit_values": self.edit_values,
         }
         return hashlib.sha256(json.dumps(state, sort_keys=True).encode()).hexdigest()
@@ -140,6 +158,7 @@ class DesktopOption:
     ref: str
     operation: str
     value: str = ""
+    expected: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -161,7 +180,11 @@ class DesktopPlan:
             if not isinstance(item, dict):
                 raise ValueError("desktop planner option must be an object")
             ref, operation, value = item.get("ref"), item.get("operation"), item.get("value", "")
-            if not isinstance(ref, str) or ref not in known or operation not in {"click", "fill"}:
+            if (
+                not isinstance(ref, str)
+                or ref not in known
+                or operation not in {"click", "fill", "press", "scroll"}
+            ):
                 raise ValueError("desktop planner referenced an unavailable control or operation")
             control = known[ref]
             if isinstance(control, DesktopControl) and not control.enabled:
@@ -172,7 +195,43 @@ class DesktopPlan:
                 raise ValueError("visual targets support click only")
             if operation == "fill" and (not value or not control.can_set_text):
                 raise ValueError("fill requires an editable control and nonempty value")
-            options.append(DesktopOption(ref, operation, value))
+            expected = item.get("expected", {})
+            if not isinstance(expected, dict) or (
+                expected
+                and (
+                    expected.get("kind") not in {"window_title_contains", "text_contains", "control_exists"}
+                    or not isinstance(expected.get("value"), str)
+                    or not expected["value"]
+                    or len(expected["value"]) > 160
+                )
+            ):
+                raise ValueError("desktop option expected postcondition is invalid")
+            if operation in {"press", "scroll"} and control.control_type not in {
+                "Edit",
+                "Document",
+                "Pane",
+                "List",
+                "Tree",
+            }:
+                raise ValueError("navigation requires a non-button focusable content target")
+            if operation == "press" and value not in {
+                "tab",
+                "escape",
+                "up",
+                "down",
+                "left",
+                "right",
+                "home",
+                "end",
+                "pageup",
+                "pagedown",
+            }:
+                raise ValueError("press requires one bounded navigation key")
+            if operation == "scroll" and value not in {"-3", "-2", "-1", "1", "2", "3"}:
+                raise ValueError("scroll requires 1-3 signed ticks")
+            if operation in {"press", "scroll"} and not expected:
+                raise ValueError("navigation requires an expected postcondition")
+            options.append(DesktopOption(ref, operation, value, expected))
         if len({(item.ref, item.operation, item.value) for item in options}) != len(options):
             raise ValueError("desktop planner returned duplicate options")
         subgoal = data.get("subgoal")
@@ -180,7 +239,9 @@ class DesktopPlan:
         if not isinstance(subgoal, str) or not subgoal.strip() or len(subgoal) > 240:
             raise ValueError("desktop planner subgoal is invalid")
         if not isinstance(success, dict) or success.get("kind") not in {
-            "window_title_contains", "text_contains", "control_exists"
+            "window_title_contains",
+            "text_contains",
+            "control_exists",
         }:
             raise ValueError("desktop planner success check is invalid")
         value = success.get("value")
@@ -220,6 +281,9 @@ class OpenDesktopTask:
         vision_mode: str = "fallback",
         allow_screenshot_upload: bool = False,
         allow_visual_clicks: bool = False,
+        allow_navigation_input: bool = False,
+        contract_path: str | Path | None = None,
+        resume_contract: bool = False,
     ) -> None:
         if not goal.strip() or not window_title_re.strip():
             raise ValueError("goal and window title regex are required")
@@ -237,6 +301,12 @@ class OpenDesktopTask:
         self.vision_grounder = vision_grounder
         self.vision_mode = vision_mode
         self.allow_visual_clicks = allow_visual_clicks
+        self.allow_navigation_input = allow_navigation_input
+        self._window_lease = None
+        self.contract_path = Path(contract_path) if contract_path else None
+        if resume_contract and self.contract_path is None:
+            raise ValueError("resume_contract requires contract_path")
+        self.resume_contract = resume_contract
         self._snapshot: DesktopSnapshot | None = None
         self._handles: dict[str, Any] = {}
         self._plan: DesktopPlan | None = None
@@ -245,6 +315,10 @@ class OpenDesktopTask:
         self._before: dict[str, DesktopSnapshot] = {}
         self._before_images: dict[str, WindowImage] = {}
         self._visual_image: WindowImage | None = None
+        self.plan_contract: PlanContract | None = None
+        self.scene_state: SceneState | None = None
+        self._compiler = FreshCandidateCompiler()
+        self.planner_latency_ms = 0.0
         self.planner_calls = 0
         self.vision_failures = 0
 
@@ -254,18 +328,62 @@ class OpenDesktopTask:
                 from pywinauto import Desktop
             except ImportError:
                 raise CapabilityUnavailable("install cua-jev[windows] for open desktop tasks") from None
-            matches = Desktop(backend="uia").windows(
-                title_re=self.window_title_re, visible_only=True
-            )
+            matches = Desktop(backend="uia").windows(title_re=self.window_title_re, visible_only=True)
             if len(matches) != 1:
                 raise RuntimeError(
                     f"window title regex must match exactly one visible window; found {len(matches)}"
                 )
             self.window = self.screen.focus_handle(matches[0].handle, maximize=False)
         self._plan = None
+        self.plan_contract = None
         self._used.clear()
         self._visual_image = None
         self.vision_failures = 0
+
+        if self.resume_contract:
+            self.restore_contract()
+
+    def save_contract(self) -> None:
+        if self.contract_path is None or self.plan_contract is None:
+            return
+        payload = {
+            "version": 1,
+            "goal": self.goal,
+            "contract": self.plan_contract.to_dict(),
+            "used": sorted(self._used),
+            "scene": self.scene_state.to_dict() if self.scene_state else None,
+        }
+        self.contract_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.contract_path.with_suffix(self.contract_path.suffix + ".tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(self.contract_path)
+
+    def restore_contract(self) -> None:
+        """Restore semantic progress only; observe/candidates must bind a fresh frame."""
+        if self.contract_path is None:
+            raise ValueError("no contract path configured")
+        payload = json.loads(self.contract_path.read_text(encoding="utf-8"))
+        if payload.get("version") != 1 or payload.get("goal") != self.goal:
+            raise ValueError("persisted contract belongs to a different task or schema")
+        contract = PlanContract.from_dict(payload["contract"])
+        used = payload.get("used")
+        if not isinstance(used, list) or any(
+            type(index) is not int or not 0 <= index < len(contract.options) for index in used
+        ):
+            raise ValueError("invalid persisted progress")
+        self.plan_contract = contract
+        self._plan = DesktopPlan(
+            contract.subgoal,
+            tuple(
+                DesktopOption("unbound", item.operation, item.value, item.expected)
+                for item in contract.options
+            ),
+            contract.success["kind"],
+            contract.success["value"],
+        )
+        self._used = set(used)
+        self._snapshot = None
+        self.scene_state = None
 
     def close(self) -> None:
         self.window = None
@@ -273,6 +391,13 @@ class OpenDesktopTask:
     def _capture(self, *, vision: bool = False) -> DesktopSnapshot:
         if self.window is None:
             raise RuntimeError("desktop task has not been reset")
+        capture_lease = getattr(self.screen, "capture_window_lease", None)
+        if (
+            vision
+            and capture_lease is not None
+            and (sys.platform == "win32" or not isinstance(self.screen, ScreenController))
+        ):
+            self._window_lease = capture_lease(int(self.window.handle))
         snapshot, handles = DesktopSnapshot.capture(self.window)
         self._handles = handles
         if vision and self.vision_grounder is not None:
@@ -284,8 +409,10 @@ class OpenDesktopTask:
                 self.screen.ensure_foreground(snapshot.window_handle)
                 rect = self.window.rectangle()
                 region = (
-                    int(rect.left), int(rect.top),
-                    int(rect.right - rect.left), int(rect.bottom - rect.top),
+                    int(rect.left),
+                    int(rect.top),
+                    int(rect.right - rect.left),
+                    int(rect.bottom - rect.top),
                 )
                 image = self.screen.capture_region(region)
                 perceive_scene = getattr(self.vision_grounder, "perceive_scene", None)
@@ -306,8 +433,10 @@ class OpenDesktopTask:
                 else:
                     self._visual_image = image
                     snapshot = replace(
-                        snapshot, visual_targets=scene.targets if self.allow_visual_clicks else (),
-                        visual_summary=scene.summary, visual_text=scene.visible_text,
+                        snapshot,
+                        visual_targets=scene.targets if self.allow_visual_clicks else (),
+                        visual_summary=scene.summary,
+                        visual_text=scene.visible_text,
                         visual_region=region,
                         visual_image_hash=hashlib.sha256(image.sample).hexdigest(),
                     )
@@ -317,10 +446,22 @@ class OpenDesktopTask:
 
     def observe(self, history: Sequence[StepResult]) -> Observation:
         self._snapshot = self._capture(vision=True)
+        self.scene_state = SceneState(self._snapshot.window_handle, self._snapshot.fingerprint())
         return Observation(
             task=self.goal,
             subgoal=self._plan.subgoal if self._plan else "Discover the next desktop subgoal",
-            state=self._snapshot.to_dict(), source=self.name,
+            state={
+                **self._snapshot.to_dict(),
+                "scene_state": self.scene_state.to_dict(),
+                "plan_contract": {
+                    "contract_id": self.plan_contract.contract_id,
+                    "subgoal": self.plan_contract.subgoal,
+                    "completed_options": sorted(self._used),
+                }
+                if self.plan_contract
+                else None,
+            },
+            source=self.name,
         )
 
     def observe_state(self, history: Sequence[StepResult]) -> DesktopSnapshot:
@@ -335,28 +476,22 @@ class OpenDesktopTask:
         self, snapshot: DesktopSnapshot, option: DesktopOption, subgoal: str
     ) -> tuple[ActionCandidate, ...]:
         """Compile one validated option without exposing planner internals to a host."""
-        previous_plan, previous_used = self._plan, self._used
+        previous_plan, previous_used, previous_contract = self._plan, self._used, self.plan_contract
         self._snapshot = snapshot
-        self._plan = DesktopPlan(
-            subgoal, (option,), "window_title_contains", "__not_a_terminal_check__"
-        )
+        self._plan = DesktopPlan(subgoal, (option,), "window_title_contains", "__not_a_terminal_check__")
         self._used = set()
+        self.plan_contract = PlanContract.ground(self._plan, snapshot)
         try:
             return self._build_candidates()
         finally:
-            self._plan, self._used = previous_plan, previous_used
+            self._plan, self._used, self.plan_contract = previous_plan, previous_used, previous_contract
 
     def _satisfied(self, snapshot: DesktopSnapshot) -> bool:
         if self._plan is None:
             return False
-        expected = self._plan.success_value.casefold()
-        if self._plan.success_kind == "control_exists":
-            return any(expected in item.name.casefold() for item in snapshot.controls)
-        actual = (
-            snapshot.window_title
-            if self._plan.success_kind == "window_title_contains" else snapshot.text
+        return verify_postcondition(
+            {"kind": self._plan.success_kind, "value": self._plan.success_value}, snapshot
         )
-        return expected in actual.casefold()
 
     def _call_planner(self, history: Sequence[StepResult]) -> None:
         assert self._snapshot is not None
@@ -364,17 +499,23 @@ class OpenDesktopTask:
             {"candidate_id": step.decision.candidate_id, "verified": step.verification.passed}
             for step in history[-6:]
         ]
-        self._plan = self.planner.plan(self.goal, self._snapshot, recent)
+        started = time.monotonic()
+        try:
+            self._plan = self.planner.plan(self.goal, self._snapshot, recent)
+        finally:
+            self.planner_calls += 1
+            self.planner_latency_ms += (time.monotonic() - started) * 1000
+        self.plan_contract = PlanContract.ground(self._plan, self._snapshot)
         self._plan_fingerprint = self._snapshot.fingerprint()
         self._used.clear()
-        self.planner_calls += 1
+        self.save_contract()
 
     def candidates(
         self, observation: Observation, history: Sequence[StepResult]
     ) -> Sequence[ActionCandidate]:
         if self._snapshot is None:
             raise RuntimeError("observe before candidate generation")
-        if self._plan is None or self._plan_fingerprint != self._snapshot.fingerprint():
+        if self._plan is None or self.plan_contract is None:
             self._call_planner(history)
         if self._satisfied(self._snapshot):
             return (ActionCandidate("done", Channel.CONTROL, "control.done", "Finish after live check."),)
@@ -386,55 +527,79 @@ class OpenDesktopTask:
 
     def _build_candidates(self) -> tuple[ActionCandidate, ...]:
         assert self._snapshot is not None and self._plan is not None
-        known = {item.ref: item for item in self._snapshot.controls}
+        assert self.plan_contract is not None
+        bindings = self._compiler.bind(self.plan_contract, self._snapshot, self._used)
         result: list[ActionCandidate] = []
         for index, option in enumerate(self._plan.options):
             if index in self._used:
                 continue
-            visual = next(
-                (item for item in self._snapshot.visual_targets if item.ref == option.ref), None
-            )
+            target = bindings.get(index)
+            if target is None:
+                continue
+            option = replace(option, ref=target.ref)
+            expected = option.expected or self.plan_contract.success
+            visual = target if isinstance(target, VisualTarget) else None
             if visual is not None:
                 if not (self.allow_button_actions and self.allow_visual_clicks):
                     continue
-                result.append(ActionCandidate(
-                    id=f"option_{index}_visual", channel=Channel.GUI,
-                    capability="desktop.visual_click",
-                    description=f"Click visually grounded {visual.label} using GUI",
-                    arguments={
-                        "ref": visual.ref, "label": visual.label, "box": list(visual.box),
-                        "visual_region": self._snapshot.visual_region,
-                        "visual_image_hash": self._snapshot.visual_image_hash,
-                        "operation": "visual_click",
-                    },
-                    risk=Risk.EXTERNAL_SIDE_EFFECT, verifier="desktop.effect",
-                    intent=f"option_{index}",
-                ))
+                result.append(
+                    ActionCandidate(
+                        id=f"option_{index}_visual",
+                        channel=Channel.GUI,
+                        capability="desktop.visual_click",
+                        description=f"Click visually grounded {visual.label} using GUI",
+                        arguments={
+                            "ref": visual.ref,
+                            "label": visual.label,
+                            "box": list(visual.box),
+                            "visual_region": self._snapshot.visual_region,
+                            "visual_image_hash": self._snapshot.visual_image_hash,
+                            "operation": "visual_click",
+                        },
+                        risk=Risk.EXTERNAL_SIDE_EFFECT,
+                        verifier="desktop.effect",
+                        intent=f"option_{index}",
+                        expected=expected,
+                    )
+                )
                 continue
-            control = known.get(option.ref)
+            control = target
             if control is None or not control.enabled:
                 continue
             if option.operation == "fill" and not self.allow_text_input:
                 continue
             if option.operation == "click" and not self.allow_button_actions:
                 continue
+            if option.operation in {"press", "scroll"} and not self.allow_navigation_input:
+                continue
             arguments = {
-                "ref": control.ref, "index": control.index, "name": control.name,
-                "control_type": control.control_type, "automation_id": control.automation_id,
-                "operation": option.operation, "value": option.value,
+                "ref": control.ref,
+                "index": control.index,
+                "name": control.name,
+                "control_type": control.control_type,
+                "automation_id": control.automation_id,
+                "operation": option.operation,
+                "value": option.value,
+                "rectangle": list(control.rectangle),
             }
             risk = Risk.LOCAL_WRITE if option.operation == "fill" else Risk.EXTERNAL_SIDE_EFFECT
             for channel, suffix in ((Channel.API, "uia"), (Channel.GUI, "gui")):
+                if channel == Channel.API and option.operation in {"press", "scroll"}:
+                    continue
                 if channel == Channel.API and option.operation == "click" and not control.can_invoke:
                     continue
                 result.append(
                     ActionCandidate(
-                        id=f"option_{index}_{suffix}", channel=channel,
+                        id=f"option_{index}_{suffix}",
+                        channel=channel,
                         capability=f"desktop.{option.operation}",
                         description=f"{option.operation.title()} {control.name or control.control_type} "
                         f"using {suffix.upper()}",
-                        arguments=arguments, risk=risk, verifier="desktop.effect",
+                        arguments=arguments,
+                        risk=risk,
+                        verifier="desktop.effect",
                         intent=f"option_{index}",
+                        expected=expected,
                     )
                 )
         return tuple(result)
@@ -445,21 +610,21 @@ class OpenDesktopTask:
     def register_verifiers(self, registry: VerifierRegistry) -> None:
         registry.register("desktop.effect", self._verify_effect)
 
-    def __call__(
-        self, candidate: ActionCandidate, observation_id: str, decision_id: str
-    ) -> ActionReceipt:
+    def __call__(self, candidate: ActionCandidate, observation_id: str, decision_id: str) -> ActionReceipt:
         def operation() -> dict[str, Any]:
+            if self._window_lease is not None:
+                self.screen.validate_window_lease(self._window_lease)
             before = self._capture()
             self._before[decision_id] = before
             ref = candidate.arguments["ref"]
             if candidate.capability == "desktop.visual_click":
                 if self._snapshot is None or self._visual_image is None:
                     raise RuntimeError("visual observation is unavailable")
-                target = next(
-                    (item for item in self._snapshot.visual_targets if item.ref == ref), None
-                )
-                if target is None or target.label != candidate.arguments["label"] or (
-                    list(target.box) != candidate.arguments["box"]
+                target = next((item for item in self._snapshot.visual_targets if item.ref == ref), None)
+                if (
+                    target is None
+                    or target.label != candidate.arguments["label"]
+                    or (list(target.box) != candidate.arguments["box"])
                 ):
                     raise RuntimeError("visual target changed since observation")
                 observed = self._visual_image
@@ -467,14 +632,15 @@ class OpenDesktopTask:
                 if (
                     before.uia_fingerprint() != self._snapshot.uia_fingerprint()
                     or candidate.arguments["visual_region"] != region
-                    or candidate.arguments["visual_image_hash"]
-                    != hashlib.sha256(observed.sample).hexdigest()
+                    or candidate.arguments["visual_image_hash"] != hashlib.sha256(observed.sample).hexdigest()
                 ):
                     raise RuntimeError("visual window changed since observation")
                 rect = self.window.rectangle()
                 actual_region = (
-                    int(rect.left), int(rect.top),
-                    int(rect.right - rect.left), int(rect.bottom - rect.top),
+                    int(rect.left),
+                    int(rect.top),
+                    int(rect.right - rect.left),
+                    int(rect.bottom - rect.top),
                 )
                 if actual_region != region:
                     raise RuntimeError("visual window moved or resized")
@@ -487,7 +653,10 @@ class OpenDesktopTask:
                 x0, y0, x1, y1 = target.box
                 x = left + (x0 + x1) * width / 2000
                 y = top + (y0 + y1) * height / 2000
-                self.screen.click_point(x, y)
+                if self._window_lease is not None:
+                    self.screen.guarded_click_point(self._window_lease, x, y)
+                else:
+                    self.screen.click_point(x, y)
                 return {"visual_target": ref, "label": target.label}
             control = next((item for item in before.controls if item.ref == ref), None)
             if control is None or any(
@@ -495,6 +664,8 @@ class OpenDesktopTask:
                 for field in ("name", "control_type", "automation_id")
             ):
                 raise RuntimeError("desktop control changed since observation")
+            if list(control.rectangle) != candidate.arguments.get("rectangle", list(control.rectangle)):
+                raise RuntimeError("desktop target geometry changed since observation")
             wrapper = self._handles[ref]
             action = candidate.arguments["operation"]
             if candidate.channel == Channel.API:
@@ -504,10 +675,28 @@ class OpenDesktopTask:
                     wrapper.set_edit_text(candidate.arguments["value"])
             elif candidate.channel == Channel.GUI:
                 left, top, right, bottom = control.rectangle
-                self.screen.click_point((left + right) / 2, (top + bottom) / 2)
+                if action in {"press", "scroll"}:
+                    focus = getattr(wrapper, "set_focus", None)
+                    if not callable(focus):
+                        raise RuntimeError("navigation target does not support safe focus")
+                    focus()
+                elif self._window_lease is not None:
+                    self.screen.guarded_click_point(
+                        self._window_lease, (left + right) / 2, (top + bottom) / 2
+                    )
+                else:
+                    self.screen.click_point((left + right) / 2, (top + bottom) / 2)
+                if self._window_lease is not None:
+                    self.screen.validate_window_lease(self._window_lease)
                 if action == "fill":
                     self.screen.hotkey("ctrl", "a")
+                    if self._window_lease is not None:
+                        self.screen.validate_window_lease(self._window_lease)
                     self.screen.paste_text(candidate.arguments["value"])
+                elif action == "press":
+                    self.screen.press(candidate.arguments["value"])
+                elif action == "scroll":
+                    self.screen.scroll(int(candidate.arguments["value"]))
             else:
                 raise ValueError("unsupported desktop route")
             return {"control": ref, "operation": action}
@@ -520,25 +709,48 @@ class OpenDesktopTask:
         before = self._before.get(receipt.decision_id)
         if before is None:
             return Verification(False, "desktop.effect", {"error": "missing pre-action snapshot"})
-        after = self._capture()
+        after = self._capture(
+            vision=(
+                candidate.capability == "desktop.visual_click"
+                and candidate.expected.get("kind") == "text_contains"
+            )
+        )
         if candidate.capability == "desktop.visual_click":
             image = self._before_images.get(receipt.decision_id)
             if image is None:
                 return Verification(False, "desktop.effect", {"error": "missing visual before image"})
             current = self.screen.capture_region(image.region)
             fraction = changed_fraction(image.sample, current.sample)
-            passed = fraction >= 0.01 or after.uia_fingerprint() != before.uia_fingerprint()
-            return Verification(bool(passed), "desktop.effect", {
-                "visual_changed_fraction": round(fraction, 4),
-                "uia_changed": after.uia_fingerprint() != before.uia_fingerprint(),
-            })
+            passed = not verify_postcondition(candidate.expected, before) and verify_postcondition(
+                candidate.expected, after
+            )
+            return Verification(
+                bool(passed),
+                "desktop.effect",
+                {
+                    "visual_changed_fraction": round(fraction, 4),
+                    "uia_changed": after.uia_fingerprint() != before.uia_fingerprint(),
+                    "expected": candidate.expected,
+                },
+            )
         if candidate.arguments["operation"] == "fill":
             wrapper = self._handles.get(candidate.arguments["ref"])
             read_value = getattr(wrapper, "get_value", None)
             passed = callable(read_value) and read_value() == candidate.arguments["value"]
         else:
-            passed = after.uia_fingerprint() != before.uia_fingerprint()
-        return Verification(bool(passed), "desktop.effect", {"state_changed": bool(passed)})
+            passed = not verify_postcondition(candidate.expected, before) and verify_postcondition(
+                candidate.expected, after
+            )
+        return Verification(
+            bool(passed),
+            "desktop.effect",
+            {
+                "expected_effect_observed": bool(passed),
+                "expected": candidate.expected,
+                "before": before.fingerprint(),
+                "after": after.fingerprint(),
+            },
+        )
 
     def evaluate(
         self,
@@ -554,6 +766,7 @@ class OpenDesktopTask:
             self._plan = None
             return Evaluation(False, False, "action_unverified_replan")
         self._used.add(int(candidate.intent.removeprefix("option_")))
+        self.save_contract()
         if self._satisfied(self._capture()):
             return Evaluation(True, True, "goal_check_passed")
         return Evaluation(False, False, "action_verified")
