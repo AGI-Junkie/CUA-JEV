@@ -161,10 +161,12 @@ def test_budget_pause_stop_stream_reconnect_preserves_facts_and_counters(tmp_pat
         assert client.post(base + "/resume", headers=headers, json={}).status_code == 200
         resumed = wait(client, sid, {"paused"})
         assert resumed["counters"]["steps"] == 1
-        assert resumed["counters"]["model_attempts"] >= paused["counters"]["model_attempts"]
+        assert resumed["counters"]["model_attempts"] == paused["counters"]["model_attempts"] + 1
+        assert resumed["counters"]["jev"]["calls"] == paused["counters"]["jev"]["calls"] + 1
         assert client.post(base + "/stop", headers=headers, json={}).status_code == 200
         stopped = wait(client, sid, {"stopped"})
         assert stopped["counters"]["steps"] == 1
+        assert stopped["counters"]["model_attempts"] == resumed["counters"]["model_attempts"]
         all_facts = client.get(base + "/events").json()["events"]
         replay_cursor = streamed[-1]["seq"]
         replay = client.get(base + "/stream", headers={"last-event-id": str(replay_cursor)})
