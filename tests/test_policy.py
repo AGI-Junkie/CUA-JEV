@@ -114,21 +114,9 @@ def test_jev_policy_reports_actionable_connection_error():
     assert "secret network details" not in str(error.value)
 
 
-def test_jev_policy_can_transparently_fall_back_on_transport_failure():
-    def handler(request):
-        raise httpx.ConnectError("temporary outage", request=request)
-
-    policy = JevPolicy(
-        api_key="secret",
-        client=httpx.Client(transport=httpx.MockTransport(handler)),
-        retries=0,
-        fallback_on_transport=True,
-    )
-    decision = policy.choose(Observation("read", "read file", {}), candidates())
-
-    assert decision.candidate_id == "mcp"
-    assert decision.model == "jev-unavailable/rule-fallback"
-    assert policy.last_exchange["fallback"]["policy"] == "rule-baseline"
+def test_jev_policy_rejects_rule_fallback_configuration():
+    with pytest.raises(PolicyError, match="rule fallback is disabled"):
+        JevPolicy(api_key="secret", fallback_on_transport=True)
 
 
 def test_jev_policy_never_falls_back_on_authentication_failure():
@@ -139,8 +127,24 @@ def test_jev_policy_never_falls_back_on_authentication_failure():
         api_key="secret",
         client=httpx.Client(transport=httpx.MockTransport(handler)),
         retries=2,
-        fallback_on_transport=True,
     )
     with pytest.raises(PolicyError, match="authentication failed"):
         policy.choose(Observation("read", "read file", {}), candidates())
     assert "fallback" not in policy.last_exchange
+
+
+def test_jev_timeout_records_attempts_latency_and_no_fallback():
+    def handler(request):
+        raise httpx.ReadTimeout("private transport detail", request=request)
+
+    policy = JevPolicy(api_key="secret", retries=1, sleep=lambda _: None,
+                       client=httpx.Client(transport=httpx.MockTransport(handler)))
+    with pytest.raises(PolicyError, match="timed out after 2 attempts"):
+        policy.choose(Observation("read", "read file", {}), candidates())
+    assert policy.metrics["calls"] == 1
+    assert policy.metrics["attempts"] == 2
+    assert policy.metrics["transport_failures"] == 1
+    assert policy.metrics["latency_ms"] > 0
+    assert policy.last_exchange["latency_ms"] > 0
+    assert "fallback" not in policy.last_exchange
+    assert "private transport detail" not in str(policy.last_exchange)

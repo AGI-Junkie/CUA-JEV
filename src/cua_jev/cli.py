@@ -75,7 +75,7 @@ def _parser() -> argparse.ArgumentParser:
     suite.add_argument(
         "--policy-fallback",
         action="store_true",
-        help="fall back to the deterministic rule policy after transient Jev transport failures",
+        help="disabled legacy option; Jev runs now fail closed if Jev is unavailable",
     )
     open_browser = sub.add_parser(
         "open-browser", help="Experimental open-goal browser loop with a pluggable JSON planner"
@@ -125,6 +125,12 @@ def _parser() -> argparse.ArgumentParser:
     open_desktop.add_argument("--policy", choices=("rule", "jev"), default="jev")
     open_desktop.add_argument("--allow-text-input", action="store_true")
     open_desktop.add_argument("--allow-button-actions", action="store_true")
+    open_desktop.add_argument("--allow-navigation-input", action="store_true",
+                              help="Permit bounded keys and scroll with declared effects; no drag")
+    open_desktop.add_argument("--contract-path", type=Path,
+                              help="Private local JSON plan/progress checkpoint; may contain task text")
+    open_desktop.add_argument("--resume-contract", action="store_true",
+                              help="Resume semantic checkpoint after a fresh observation")
     open_desktop.add_argument(
         "--vision-model", help="Optional vision-capable model ID for window screenshot grounding"
     )
@@ -309,6 +315,7 @@ def _open_desktop_runner(args: argparse.Namespace) -> EpisodeRunner:
                 allow_destructive=args.allow_button_actions,
             ),
             executors=executors, verifiers=verifiers, trace=JsonlTrace(args.trace),
+            require_jev=args.policy == "jev", decision_timeout_s=35,
         )
 
     return EpisodeRunner(runtime_factory, EpisodeConfig(max_steps=args.max_steps, timeout_s=600))
@@ -473,6 +480,8 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(summary, indent=2, ensure_ascii=False))
         return 0 if result.success else 1
     if args.command == "open-desktop":
+        if args.resume_contract and not args.contract_path:
+            raise SystemExit("--resume-contract requires --contract-path")
         if args.max_steps < 1:
             raise SystemExit("--max-steps must be positive")
         if args.vision_model and not args.allow_screenshot_upload:
@@ -487,6 +496,8 @@ def main(argv: list[str] | None = None) -> int:
             environment = OpenDesktopTask(
                 goal=args.goal, window_title_re=args.window_title, planner=planner,
                 allow_text_input=args.allow_text_input,
+                allow_navigation_input=args.allow_navigation_input,
+                contract_path=args.contract_path, resume_contract=args.resume_contract,
                 allow_button_actions=args.allow_button_actions,
                 vision_grounder=vision_planner, vision_mode=args.vision_mode,
                 allow_screenshot_upload=args.allow_screenshot_upload,
@@ -507,6 +518,9 @@ def main(argv: list[str] | None = None) -> int:
         summary["vision_wall_ms"] = vision_planner.vision_wall_ms if vision_planner else 0
         summary["vision_model_usage"] = vision_planner.usage_totals if vision_planner else None
         summary["policy"] = args.policy
+        summary["policy_mode"] = "jev-api-required" if args.policy == "jev" else "rule-baseline"
+        summary["planner_attempts"] = planner.planning_attempts
+        summary["contract_id"] = environment.plan_contract.contract_id if environment.plan_contract else None
         summary["policy_decision_ms"] = sum(step.decision.latency_ms for step in result.steps)
         print(json.dumps(summary, indent=2, ensure_ascii=False))
         return 0 if result.success else 1

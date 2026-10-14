@@ -1,5 +1,7 @@
 # <img src="src/cua_jev/ui/static/logo-mark.svg" width="44" alt="ZJU-REAL Lab logo"> CUA-JEV: Jev for Computer Use
 
+Cloud development checkpoint: [persistent desktop contracts and workbench proposal](docs/CLOUD_HANDOFF_2026-10-14.md). Run the local UI and open `/workbench` for the clearly labeled interaction prototype.
+
 [Webpage](https://zjureal.com/CUA-JEV/) · [Watch demos](https://zjureal.com/CUA-JEV/#windows-cases) · [中文文档](README.zh-CN.md)
 
 CUA-JEV is an open-source reference framework for Jev-powered computer use. A task adapter turns structured state from the browser, desktop UI, office applications, terminal, or filesystem into **legal, executable, verifiable** action candidates. [Jev](https://docs.typesafe.ai/introduction) selects a **concrete action and its execution route**; the framework guards and executes that choice, verifies the resulting state, and observes again. The project includes four earlier task-specific workflows and four newer recorded model + Jev Windows case studies, without training a task-specific router.

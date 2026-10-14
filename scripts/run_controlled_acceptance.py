@@ -101,6 +101,12 @@ def run_layout(browser, layout: str, output: Path) -> dict:
             first_bounds = next(c.rectangle for c in task._snapshot.controls if c.name == "Save local note")
         step = runtime.step(observation, candidates)
         history.append(step)
+        envelope = runtime.last_jev_decision
+        assert envelope is not None
+        assert envelope.decision.decision_id == step.receipt.decision_id
+        assert envelope.plan_contract_id == task.plan_contract.contract_id
+        assert envelope.decision.candidate_id in envelope.offered_candidate_ids
+        assert envelope.request_hash
         candidate = next(c for c in candidates if c.id == step.decision.candidate_id)
         evaluation = task.evaluate(observation, candidate, step.receipt, step.verification)
         assert step.receipt.success, step.receipt.error

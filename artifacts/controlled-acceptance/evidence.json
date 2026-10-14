@@ -20,28 +20,28 @@
       "observer": "DOM semantics stand in for UIA; not VLM",
       "models": "simulated planner and Jev HTTP responses; no paid calls",
       "planner_calls": 1,
-      "planner_latency_ms": 0.047,
+      "planner_latency_ms": 0.03,
       "jev_logical_calls": 2,
       "jev_transport_attempts": 2,
       "jev_latency_ms": [
-        0.824,
-        0.451
+        0.674,
+        0.698
       ],
       "policy_metrics": {
         "calls": 2,
         "attempts": 2,
-        "latency_ms": 1.274993999970775,
+        "latency_ms": 1.3721830000008595,
         "transport_failures": 0
       },
       "runtime_metrics": {
         "policy_calls": 2,
         "policy_errors": 0,
-        "policy_latency_ms": 2.06204300002355
+        "policy_latency_ms": 2.3844450000183315
       },
       "require_jev": true,
       "decision_timeout_s": 5,
       "plan_contract_file": "columns-plan.json",
-      "elapsed_ms": 1454.931,
+      "elapsed_ms": 1312.679,
       "verified_steps": 2,
       "independent_dom_postcondition": "Saved locally: Cloud acceptance note",
       "mouse_keyboard_inputs": [
@@ -105,28 +105,28 @@
       "observer": "DOM semantics stand in for UIA; not VLM",
       "models": "simulated planner and Jev HTTP responses; no paid calls",
       "planner_calls": 1,
-      "planner_latency_ms": 0.024,
+      "planner_latency_ms": 0.028,
       "jev_logical_calls": 2,
       "jev_transport_attempts": 2,
       "jev_latency_ms": [
-        0.486,
-        0.388
+        0.364,
+        0.35
       ],
       "policy_metrics": {
         "calls": 2,
         "attempts": 2,
-        "latency_ms": 0.8738690000313909,
+        "latency_ms": 0.714188000017657,
         "transport_failures": 0
       },
       "runtime_metrics": {
         "policy_calls": 2,
         "policy_errors": 0,
-        "policy_latency_ms": 1.9438290000266534
+        "policy_latency_ms": 1.4049910000153432
       },
       "require_jev": true,
       "decision_timeout_s": 5,
       "plan_contract_file": "stacked-plan.json",
-      "elapsed_ms": 1221.882,
+      "elapsed_ms": 1278.362,
       "verified_steps": 2,
       "independent_dom_postcondition": "Saved locally: Cloud acceptance note",
       "mouse_keyboard_inputs": [

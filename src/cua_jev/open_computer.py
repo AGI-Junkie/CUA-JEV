@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol
 from urllib.parse import urldefrag
@@ -117,6 +117,7 @@ class ComputerOption:
     ref: str
     operation: str
     value: str = ""
+    expected: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -151,7 +152,18 @@ class ComputerPlan:
             except ValueError as exc:
                 rejected.append(f"{item['ref']} ({item.get('operation')}): {exc}")
                 continue
-            option = ComputerOption(namespace, *checked)
+            expected = item.get("expected", {})
+            if not isinstance(expected, dict) or (expected and (
+                namespace != "d"
+                or expected.get("kind") not in {
+                    "window_title_contains", "text_contains", "control_exists"
+                }
+                or not isinstance(expected.get("value"), str)
+                or not 1 <= len(expected["value"]) <= 160
+            )):
+                rejected.append(f"{item['ref']}: invalid expected postcondition")
+                continue
+            option = ComputerOption(namespace, *checked, expected=dict(expected))
             if option not in options:
                 options.append(option)
         if not options:
@@ -534,6 +546,15 @@ class OpenComputerTask:
                 self._snapshot.state_for(option.source), option.ref,
                 option.operation, option.value, self._plan.subgoal, index,
             )
+            if option.source == "d" and option.operation != "fill":
+                expected = option.expected
+                if not expected and self.required_window_title_contains:
+                    expected = {
+                        "kind": "window_title_contains", "value": self.required_window_title_contains,
+                    }
+                if not expected and self.required_window_text_contains:
+                    expected = {"kind": "text_contains", "value": self.required_window_text_contains}
+                candidates = tuple(replace(item, expected=expected) for item in candidates)
             if option.source == "m" and self.mcp_current_page_only and candidates and (
                 candidates[0].arguments.get("arguments", {}).get("href")
                 != self._snapshot.browser.url

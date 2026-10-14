@@ -79,6 +79,10 @@ def create_app(root: str | Path | None = None, data: str | Path | None = None):
     def preview():
         return (static / "home.html").read_text(encoding="utf-8")
 
+    @app.get("/workbench", response_class=HTMLResponse)
+    def workbench():
+        return (static / "workbench.html").read_text(encoding="utf-8")
+
     @app.get("/early-work.html", response_class=HTMLResponse)
     def early_work():
         return (static / "index.html").read_text(encoding="utf-8")

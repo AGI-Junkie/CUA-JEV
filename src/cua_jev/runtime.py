@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from .errors import GuardRejected, PolicyError
 from .guard import ActionGuard
-from .models import ActionCandidate, ActionReceipt, Decision, Observation, Verification
+from .models import ActionCandidate, ActionReceipt, Decision, JevDecision, Observation, Verification
 from .policy import DecisionPolicy, JevPolicy
 from .registry import ExecutorRegistry
 from .safety import RuntimeControl
@@ -43,6 +43,7 @@ class AgentRuntime:
         self.trace = trace or JsonlTrace()
         self.control = control or RuntimeControl()
         self.require_jev = require_jev
+        self.last_jev_decision: JevDecision | None = None
         if decision_timeout_s is not None and decision_timeout_s <= 0:
             raise ValueError("decision timeout must be positive")
         self.decision_timeout_s = decision_timeout_s
@@ -104,6 +105,11 @@ class AgentRuntime:
         exchange = getattr(self.policy, "last_exchange", None)
         if exchange:
             self.trace.append("policy_exchange", exchange)
+        if self.require_jev:
+            self.last_jev_decision = JevDecision.bind(
+                decision, observation, tuple(candidates), (exchange or {}).get("request_hash")
+            )
+            self.trace.append("jev_decision", self.last_jev_decision.to_dict())
         candidate = next((item for item in candidates if item.id == decision.candidate_id), None)
         self.trace.append(
             "commitment",

@@ -446,7 +446,15 @@ class OpenDesktopTask:
 
     def observe(self, history: Sequence[StepResult]) -> Observation:
         self._snapshot = self._capture(vision=True)
-        self.scene_state = SceneState(self._snapshot.window_handle, self._snapshot.fingerprint())
+        lease = self._window_lease
+        self.scene_state = SceneState(
+            self._snapshot.window_handle, self._snapshot.fingerprint(),
+            observed_at=lease.captured_at if lease else time.time(),
+            window_evidence={**vars(lease), "foreground_checked": True} if lease else {
+                "status": "platform-window-evidence-unavailable",
+                "foreground_checked": False,
+            },
+        )
         return Observation(
             task=self.goal,
             subgoal=self._plan.subgoal if self._plan else "Discover the next desktop subgoal",
@@ -523,7 +531,9 @@ class OpenDesktopTask:
         if not result:
             self._call_planner(history)
             result = self._build_candidates()
-        return result
+        return tuple(replace(candidate, arguments={
+            **candidate.arguments, "plan_contract_id": self.plan_contract.contract_id,
+        }) for candidate in result)
 
     def _build_candidates(self) -> tuple[ActionCandidate, ...]:
         assert self._snapshot is not None and self._plan is not None

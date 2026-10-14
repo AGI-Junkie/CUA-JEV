@@ -29,6 +29,7 @@ class SceneState:
     window_handle: int
     fingerprint: str
     observed_at: float = field(default_factory=time.time)
+    window_evidence: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

@@ -344,7 +344,7 @@ class PublicDecisionPolicy:
         # scene summary and grounded target labels, but not verbatim visual text.
         public_state = {
             key: value for key, value in observation.state.items()
-            if key not in {"text", "visual_text", "tool_results"}
+            if key not in {"text", "visual_text", "tool_results", "plan_contract"}
         }
         if observation.source == "open-workspace":
             browser = public_state.get("browser", {})

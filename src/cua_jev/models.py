@@ -102,6 +102,32 @@ class Decision:
 
 
 @dataclass(frozen=True)
+class JevDecision:
+    """Auditable binding of an API choice to the exact scene and offered actions."""
+
+    decision: Decision
+    scene_fingerprint: str
+    candidate_set_hash: str
+    offered_candidate_ids: tuple[str, ...]
+    plan_contract_id: str | None = None
+    request_hash: str | None = None
+
+    @classmethod
+    def bind(cls, decision: Decision, observation: Observation,
+             candidates: list[ActionCandidate] | tuple[ActionCandidate, ...],
+             request_hash: str | None = None) -> JevDecision:
+        payload = [candidate.to_dict() for candidate in candidates]
+        digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+        contract_ids = {candidate.arguments.get("plan_contract_id") for candidate in candidates}
+        contract_id = next(iter(contract_ids)) if len(contract_ids) == 1 else None
+        return cls(decision, state_fingerprint(observation), digest,
+                   tuple(candidate.id for candidate in candidates), contract_id, request_hash)
+
+    def to_dict(self) -> dict[str, Any]:
+        return _plain(asdict(self))
+
+
+@dataclass(frozen=True)
 class ActionReceipt:
     observation_id: str
     decision_id: str
