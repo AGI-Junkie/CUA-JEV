@@ -1,0 +1,36 @@
+{
+  "diagnosis": "remote_ci_absent_cause_unproven",
+  "repository": "AGI-Junkie/CUA-JEV",
+  "default_branch": "main",
+  "main_sha": "f22e41e24f8eaca09888862aa115c0d28ee7eb91",
+  "pr": 1,
+  "base_repository": "AGI-Junkie/CUA-JEV",
+  "head_repository": "AGI-Junkie/CUA-JEV",
+  "diagnostic_commit": "45208b1d91e5a5b1f851f01fee4cb40368cba3c4",
+  "workflow_paths_present_on_main_and_feature": [
+    ".github/workflows/ci.yml",
+    ".github/workflows/pages.yml"
+  ],
+  "ci_event_filters": false,
+  "main_ci_events": [
+    "push",
+    "pull_request"
+  ],
+  "feature_ci_events": [
+    "push",
+    "pull_request",
+    "workflow_dispatch"
+  ],
+  "connector_contents_update": "success",
+  "runs_after_contents_update": 0,
+  "checks_after_contents_update": 0,
+  "permissions_cli_result": "Forbidden; no GitHub response details available",
+  "connector_workflows_and_permissions_result": "unsupported URL allowlist, INVALID_ARGUMENT HTTPError 400",
+  "credential_free_public_api_result": "CONNECT tunnel 403 Forbidden before GitHub",
+  "actions_disabled_proven": false,
+  "token_suppression_proven": false,
+  "main_bootstrap_required_proven": false,
+  "merged": false,
+  "new_credentials_requested": false,
+  "paid_api_calls": 0
+}
