@@ -798,6 +798,8 @@ class OpenDesktopTask:
                 raise RuntimeError("desktop target geometry changed since observation")
             wrapper = self._handles[ref]
             action = candidate.arguments["operation"]
+            if action == "scroll" and self._window_lease is None:
+                raise RuntimeError("scroll requires fresh physical window evidence")
             if candidate.channel == Channel.API:
                 if action == "click":
                     wrapper.invoke()
@@ -826,7 +828,29 @@ class OpenDesktopTask:
                 elif action == "press":
                     self.screen.press(candidate.arguments["value"])
                 elif action == "scroll":
-                    self.screen.scroll(int(candidate.arguments["value"]))
+                    def validate_scroll_target() -> None:
+                        fresh = self._capture()
+                        if not self._completed_prerequisites_hold(fresh):
+                            raise RuntimeError("completed plan prerequisite changed before scroll")
+                        if verify_postcondition(candidate.expected, fresh):
+                            raise RuntimeError("desktop expected effect already satisfied before scroll")
+                        matches = [
+                            target for target in fresh.controls
+                            if target.enabled and all(
+                                getattr(target, field) == candidate.arguments[field]
+                                for field in ("name", "control_type", "automation_id")
+                            )
+                        ]
+                        if len(matches) != 1 or matches[0].rectangle != control.rectangle:
+                            raise RuntimeError("desktop scroll target changed before input")
+                        self._before[decision_id] = fresh
+
+                    # Integer pixels stay inside even a one-pixel-wide control;
+                    # rounding a fractional midpoint could reach its neighbour.
+                    self.screen.guarded_scroll_point(
+                        self._window_lease, (left + right) // 2, (top + bottom) // 2,
+                        int(candidate.arguments["value"]), before_scroll=validate_scroll_target,
+                    )
             else:
                 raise ValueError("unsupported desktop route")
             return {"control": ref, "operation": action}

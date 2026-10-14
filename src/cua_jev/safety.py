@@ -3,11 +3,40 @@ from __future__ import annotations
 
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 
 from .errors import GuardRejected
+
+_policy_admission: ContextVar[Callable[[Callable[[], None]], None] | None] = ContextVar(
+    "policy_admission", default=None,
+)
+
+
+@contextmanager
+def policy_request_scope(admit: Callable[[Callable[[], None]], None]) -> Iterator[None]:
+    """Keep request admission local to the actual calling thread and invocation."""
+    context = _policy_admission.set(admit)
+    try:
+        yield
+    finally:
+        _policy_admission.reset(context)
+
+
+def admit_policy_request(record: Callable[[], None]) -> None:
+    """Atomically validate and record a cooperative model request/HTTP attempt.
+
+    The admission callback releases its control lock before network I/O. Already
+    admitted work may finish after cancellation; no later attempt may be admitted.
+    Direct policy callers outside a runtime retain their existing behavior.
+    """
+    admit = _policy_admission.get()
+    if admit is None:
+        record()
+    else:
+        admit(record)
 
 
 class RuntimeControl:

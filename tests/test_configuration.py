@@ -1,4 +1,5 @@
 import json
+import os
 import stat
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
@@ -24,7 +25,9 @@ def test_memory_keys_atomic_private_persistence_and_immutable_snapshot(tmp_path)
     assert "private-secret" not in json.dumps(public)
     assert "private-secret" not in path.read_text()
     assert "private-secret" not in repr(snapshot)
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    if os.name == "posix":
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    # Windows ACLs require separate validation; POSIX mode bits do not prove them.
     assert ConfigurationStore(path).public()["roles"]["jev"]["key_configured"] is False
     store.update({"roles": {"jev": {"api_key": "", "name": "new"}}})
     assert store.snapshot().roles["jev"].api_key == "private-secret"

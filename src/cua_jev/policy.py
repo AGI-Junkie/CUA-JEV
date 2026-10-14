@@ -12,6 +12,7 @@ import httpx
 
 from .errors import PolicyError
 from .models import ActionCandidate, Decision, Observation
+from .safety import admit_policy_request
 
 
 def public_scene_state(scene: object) -> dict:
@@ -109,14 +110,23 @@ class JevPolicy:
             json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
         ).hexdigest()
         started = time.perf_counter()
-        self.metrics["calls"] += 1
+
+        def record_call():
+            self.metrics["calls"] += 1
+
+        admit_policy_request(record_call)
         missing = object()
         result = missing
         safe_error = "Jev request failed"
         attempts = 0
-        for attempt in range(self.retries + 1):
+
+        def record_attempt():
+            nonlocal attempts
             attempts += 1
             self.metrics["attempts"] += 1
+
+        for attempt in range(self.retries + 1):
+            admit_policy_request(record_attempt)
             try:
                 response = self._client.post(
                     self.api_url,

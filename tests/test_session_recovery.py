@@ -122,7 +122,15 @@ def test_correction_rejects_surrogate_context_without_scope_or_queue_change(tmp_
     assert session.commands.empty()
 
 
-def test_valid_unicode_context_and_task_persist_and_replay(monkeypatch, tmp_path):
+@pytest.mark.parametrize("default_encoding", [None, "cp1252"])
+def test_valid_unicode_context_and_task_persist_and_replay(monkeypatch, tmp_path, default_encoding):
+    if default_encoding is not None:
+        original_read = Path.read_text
+
+        def read_with_legacy_default(path, encoding=None, errors=None):
+            return original_read(path, encoding=encoding or default_encoding, errors=errors)
+
+        monkeypatch.setattr(Path, "read_text", read_with_legacy_default)
     monkeypatch.setattr(_Session, "run", lambda self: None)
     manager = ControlledSessionManager(ROOT, tmp_path)
     text = "中文 😀 e\u0301 separator\u2028in context"

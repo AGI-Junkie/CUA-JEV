@@ -312,7 +312,7 @@ def _open_desktop_runner(args: argparse.Namespace) -> EpisodeRunner:
             policy=PublicDecisionPolicy(inner),
             guard=ActionGuard(
                 allow_writes=args.allow_text_input,
-                allow_destructive=args.allow_button_actions,
+                allow_destructive=args.allow_button_actions or args.allow_navigation_input,
             ),
             executors=executors, verifiers=verifiers, trace=JsonlTrace(args.trace),
             require_jev=args.policy == "jev", decision_timeout_s=35,

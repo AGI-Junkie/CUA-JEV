@@ -3,7 +3,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
-from test_open_desktop import FakeWindow
+from test_open_desktop import FakeDesktopScreen, FakeWindow
 
 from cua_jev.episode import EpisodeConfig, EpisodeRunner, EpisodeStatus
 from cua_jev.executors import ControlExecutor
@@ -119,7 +119,7 @@ def environment(tmp_path):
         ),
         desktop=OpenDesktopTask(
             goal=goal, window_title_re="Example", planner=planner,
-            window=DesktopWindow(), allow_button_actions=True,
+            window=DesktopWindow(), screen=FakeDesktopScreen(), allow_button_actions=True,
         ),
         local_tool_root=tmp_path,
         required_url_contains="/done", required_window_title_contains="Done",
@@ -410,7 +410,7 @@ def test_editor_style_text_goal_uses_private_live_edit_value():
         ),
         desktop=OpenDesktopTask(
             goal=goal, window_title_re="Example", planner=planner,
-            window=window, allow_text_input=True,
+            window=window, screen=FakeDesktopScreen(), allow_text_input=True,
         ),
         required_url_contains="/done", required_window_text_contains="Ada",
         required_capabilities=("desktop.fill",),
@@ -694,8 +694,9 @@ def test_browser_foreground_loss_allows_passive_desktop_observe_and_blocks_its_a
             self.focuses += 1
             pytest.fail("shared observation must not steal foreground")
 
-        def capture_window_lease(self, handle, **kwargs):
-            self.ensure_foreground(handle)
+        def capture_window_lease(self, handle, *, require_foreground=True):
+            if require_foreground:
+                self.ensure_foreground(handle)
             return WindowLease(handle, 1, (0, 0, 200, 200), 96)
 
     task = environment(tmp_path)

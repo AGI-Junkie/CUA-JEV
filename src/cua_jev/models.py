@@ -162,7 +162,7 @@ class Verification:
 
 
 def state_fingerprint(observation: Observation) -> str:
-    # Volatile ids and timestamps must not hide an unchanged environment state.
+    # Decision/audit binding retains exact capture evidence and planner context.
     state = {key: value for key, value in observation.state.items() if key != "recent_actions"}
     stable = {
         "task": observation.task,
@@ -170,5 +170,32 @@ def state_fingerprint(observation: Observation) -> str:
         "source": observation.source,
         "state": state,
     }
+    raw = json.dumps(stable, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(raw).hexdigest()
+
+
+def stable_scene_fingerprint(observation: Observation) -> str:
+    """Compare environment progress for episode termination, never action binding.
+
+    Reobserving an unchanged desktop renews capture timestamps; replanning can
+    also change wording and contract IDs without changing the environment.
+    Exclude that known bookkeeping only here. Keep the original observation,
+    physical scene/identity/geometry evidence, and application data intact for
+    exact decision binding and the independent freshness/input guards.
+    """
+    state = {
+        key: value for key, value in observation.state.items()
+        if key not in {"recent_actions", "plan_contract"}
+    }
+    scene = state.get("scene_state")
+    if isinstance(scene, dict):
+        scene = {key: value for key, value in scene.items() if key != "observed_at"}
+        evidence = scene.get("window_evidence")
+        if isinstance(evidence, dict):
+            scene["window_evidence"] = {
+                key: value for key, value in evidence.items() if key != "captured_at"
+            }
+        state["scene_state"] = scene
+    stable = {"task": observation.task, "source": observation.source, "state": state}
     raw = json.dumps(stable, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(raw).hexdigest()

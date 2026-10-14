@@ -1,0 +1,215 @@
+{
+  "mode": "local HTTP model mocks, real Chromium input",
+  "paid_api_calls": 0,
+  "ui_checks": {
+    "source": "actual Chromium UI at FastAPI /workbench, CSP enabled",
+    "execution": "real controlled Chromium GUI input and exact DOM verification",
+    "models": "simulated HTTP via ChatModelPlanner and JevPolicy; no paid models",
+    "windows": false,
+    "checks": [
+      "no dispatch before real browser preview",
+      "backend configuration ack and password inputs cleared",
+      "columns: actual backend PNG preview",
+      "columns: real GUI receipt, exact note verification, measured API counters",
+      "stacked: actual backend PNG preview",
+      "stacked: real GUI receipt, exact note verification, measured API counters",
+      "interrupted start restores ready after reload and starts without duplicate confirm",
+      "real backend action-budget failure shows recovery, never completion",
+      "scope revocation acknowledged by backend",
+      "reload restores authoritative active session, events and controls",
+      "dirty paused task stays blocked across polling until correction/new preview",
+      "unsupported task/observer correction cannot silently resume stale backend task",
+      "real paused worker takeover, correction, scope reconfirmation, resume completion",
+      "emergency stop waits for real backend stopped state",
+      "optional actual screenshot / simulated vision API / real visual-click receipt",
+      "backend facts/history shown read-only",
+      "mobile no horizontal overflow",
+      "no browser page errors",
+      "external browser requests blocked and never attempted"
+    ],
+    "session_ids": [
+      "c2226ccc22c94f98b4bd2038a3d74bff",
+      "fd9f52e0c0e64aa4ad6dcf2a8bf362ca",
+      "cfcb9f5bebd842fcac630176f3d37742",
+      "e8a534871f1c4418944b3b4d2fa587c1",
+      "a6638941ed1f4e8398f42bd036b39786",
+      "03f3975c713d4052a3ba8cee8e635cf7",
+      "f678216bfb6e430ea4667b2204caecff"
+    ],
+    "page_errors": [],
+    "external_requests": []
+  },
+  "cross_layout": {
+    "scope": "controlled local fixture only; not arbitrary Windows/apps/games",
+    "layouts": [
+      {
+        "initial_layout": "columns",
+        "layout_changed_between_actions": true,
+        "first_button_bounds": [
+          121,
+          539,
+          295,
+          595
+        ],
+        "final_button_bounds": [
+          306,
+          481,
+          874,
+          537
+        ],
+        "browser": "real headless Chromium",
+        "observer": "DOM semantics stand in for UIA; not VLM",
+        "models": "simulated planner and Jev HTTP responses; no paid calls",
+        "planner_calls": 1,
+        "planner_latency_ms": 0.034,
+        "jev_logical_calls": 2,
+        "jev_transport_attempts": 2,
+        "jev_latency_ms": [
+          0.704,
+          0.807
+        ],
+        "policy_metrics": {
+          "calls": 2,
+          "attempts": 2,
+          "latency_ms": 1.5112820001377258,
+          "transport_failures": 0
+        },
+        "runtime_metrics": {
+          "policy_calls": 2,
+          "policy_errors": 0,
+          "policy_latency_ms": 2.422743999886734
+        },
+        "require_jev": true,
+        "decision_timeout_s": 5,
+        "plan_contract_file": "columns-plan.json",
+        "elapsed_ms": 1689.005,
+        "verified_steps": 2,
+        "independent_dom_postcondition": "Saved locally: Cloud acceptance note",
+        "mouse_keyboard_inputs": [
+          {
+            "operation": "click",
+            "x": 329.5,
+            "y": 488.0
+          },
+          {
+            "operation": "hotkey",
+            "keys": [
+              "ctrl",
+              "a"
+            ]
+          },
+          {
+            "operation": "text",
+            "length": 21
+          },
+          {
+            "operation": "click",
+            "x": 590.0,
+            "y": 509.0
+          }
+        ],
+        "api_choices": [
+          {
+            "offered": [
+              "option_0_uia",
+              "option_0_gui"
+            ],
+            "selected": "option_0_gui"
+          },
+          {
+            "offered": [
+              "option_1_gui"
+            ],
+            "selected": "option_1_gui"
+          }
+        ],
+        "external_network_requests": 0,
+        "paid_api_calls": 0
+      },
+      {
+        "initial_layout": "stacked",
+        "layout_changed_between_actions": true,
+        "first_button_bounds": [
+          306,
+          763,
+          874,
+          819
+        ],
+        "final_button_bounds": [
+          642,
+          539,
+          816,
+          595
+        ],
+        "browser": "real headless Chromium",
+        "observer": "DOM semantics stand in for UIA; not VLM",
+        "models": "simulated planner and Jev HTTP responses; no paid calls",
+        "planner_calls": 1,
+        "planner_latency_ms": 0.039,
+        "jev_logical_calls": 2,
+        "jev_transport_attempts": 2,
+        "jev_latency_ms": [
+          0.377,
+          0.681
+        ],
+        "policy_metrics": {
+          "calls": 2,
+          "attempts": 2,
+          "latency_ms": 1.0582399995655578,
+          "transport_failures": 0
+        },
+        "runtime_metrics": {
+          "policy_calls": 2,
+          "policy_errors": 0,
+          "policy_latency_ms": 2.009361000091303
+        },
+        "require_jev": true,
+        "decision_timeout_s": 5,
+        "plan_contract_file": "stacked-plan.json",
+        "elapsed_ms": 1595.873,
+        "verified_steps": 2,
+        "independent_dom_postcondition": "Saved locally: Cloud acceptance note",
+        "mouse_keyboard_inputs": [
+          {
+            "operation": "click",
+            "x": 590.0,
+            "y": 712.0
+          },
+          {
+            "operation": "hotkey",
+            "keys": [
+              "ctrl",
+              "a"
+            ]
+          },
+          {
+            "operation": "text",
+            "length": 21
+          },
+          {
+            "operation": "click",
+            "x": 729.0,
+            "y": 567.0
+          }
+        ],
+        "api_choices": [
+          {
+            "offered": [
+              "option_0_uia",
+              "option_0_gui"
+            ],
+            "selected": "option_0_gui"
+          },
+          {
+            "offered": [
+              "option_1_gui"
+            ],
+            "selected": "option_1_gui"
+          }
+        ],
+        "external_network_requests": 0,
+        "paid_api_calls": 0
+      }
+    ]
+  }
+}

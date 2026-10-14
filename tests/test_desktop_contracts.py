@@ -6,7 +6,7 @@ import stat
 from dataclasses import replace
 
 import pytest
-from test_open_desktop import FakeDesktopPlanner, FakeWindow
+from test_open_desktop import FakeDesktopPlanner, FakeDesktopScreen, FakeWindow
 
 from cua_jev.desktop_contracts import PlanContract, verify_postcondition
 from cua_jev.open_desktop import DesktopPlan, OpenDesktopTask
@@ -40,6 +40,7 @@ class SequentialPlanner(FakeDesktopPlanner):
 
 
 def task(window, planner=None, **kwargs):
+    kwargs.setdefault("screen", FakeDesktopScreen())
     item = OpenDesktopTask(
         goal="Finish the window",
         window_title_re="Example",

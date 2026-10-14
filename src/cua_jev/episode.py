@@ -10,7 +10,7 @@ from enum import StrEnum
 from typing import Protocol
 
 from .errors import CuaJevError, GuardRejected, ObservationExpired, PolicyError
-from .models import ActionCandidate, ActionReceipt, Observation, Verification, state_fingerprint
+from .models import ActionCandidate, ActionReceipt, Observation, Verification, stable_scene_fingerprint
 from .runtime import AgentRuntime, StepResult
 
 
@@ -175,7 +175,7 @@ class EpisodeRunner:
                 if result is None:
                     break
                 history.append(result)
-                fingerprints.append(state_fingerprint(observation))
+                fingerprints.append(stable_scene_fingerprint(observation))
                 actions.append(result.decision.candidate_id)
                 candidate = next(item for item in candidates if item.id == result.decision.candidate_id)
                 evaluation = environment.evaluate(observation, candidate, result.receipt, result.verification)

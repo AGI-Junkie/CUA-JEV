@@ -11,6 +11,7 @@ from cua_jev.open_desktop import DesktopOption, DesktopPlan, DesktopSnapshot, Op
 from cua_jev.policy import RulePolicy
 from cua_jev.registry import ExecutorRegistry
 from cua_jev.runtime import AgentRuntime
+from cua_jev.safety import WindowLease
 from cua_jev.verify import VerifierRegistry
 from cua_jev.vision import VisualScene, VisualTarget, WindowImage
 
@@ -65,6 +66,22 @@ class FakeWindow:
         return self.title
 
 
+class FakeDesktopScreen:
+    """Synthetic window evidence; this fixture never contacts a host desktop."""
+
+    def ensure_foreground(self, handle):
+        assert handle == 42
+
+    def capture_window_lease(self, handle, *, require_foreground=True):
+        if require_foreground:
+            self.ensure_foreground(handle)
+        return WindowLease(handle, 123, (0, 0, 1200, 1000), 96)
+
+    def validate_window_lease(self, lease):
+        self.ensure_foreground(lease.handle)
+        lease.validate(self.capture_window_lease(lease.handle))
+
+
 class FakeDesktopPlanner:
     def __init__(self, options=None):
         self.calls = 0
@@ -87,7 +104,7 @@ def test_desktop_task_runs_without_app_specific_script():
     planner = FakeDesktopPlanner()
     environment = OpenDesktopTask(
         goal="Finish the window", window_title_re="Example", planner=planner,
-        window=FakeWindow(), allow_button_actions=True,
+        window=FakeWindow(), screen=FakeDesktopScreen(), allow_button_actions=True,
     )
 
     def factory(item):
@@ -132,7 +149,7 @@ def test_desktop_fill_is_verified_by_control_value():
     environment = OpenDesktopTask(
         goal="Finish the window", window_title_re="Example",
         planner=FakeDesktopPlanner([{"ref": "c0", "operation": "fill", "value": "Ada"}]),
-        window=window, allow_text_input=True,
+        window=window, screen=FakeDesktopScreen(), allow_text_input=True,
     )
     environment.reset()
     observation = environment.observe(())
@@ -150,7 +167,7 @@ def test_changed_desktop_control_invalidates_old_plan():
     planner = FakeDesktopPlanner()
     environment = OpenDesktopTask(
         goal="Finish the window", window_title_re="Example", planner=planner,
-        window=window, allow_button_actions=True,
+        window=window, screen=FakeDesktopScreen(), allow_button_actions=True,
     )
     environment.reset()
     first = environment.observe(())
@@ -440,7 +457,7 @@ def test_desktop_rejects_expected_effect_that_becomes_true_before_input():
     window = FakeWindow()
     task = OpenDesktopTask(
         goal="Finish the window", window_title_re="Example", window=window,
-        planner=FakeDesktopPlanner(), allow_button_actions=True,
+        planner=FakeDesktopPlanner(), screen=FakeDesktopScreen(), allow_button_actions=True,
     )
     task.reset()
     observation = task.observe(())

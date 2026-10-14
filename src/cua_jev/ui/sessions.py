@@ -129,7 +129,7 @@ class ControlledSessionManager:
         self._history = {}
         for path in self.directory.glob("*/session.json"):
             try:
-                state = json.loads(path.read_text())
+                state = json.loads(path.read_text(encoding="utf-8"))
                 if state["status"] not in TERMINAL:
                     state.update(status="interrupted", error="Server restarted; create a new scoped session")
                 self._history[state["id"]] = state
@@ -405,7 +405,9 @@ class _Session:
                 )
                 page = browser.new_page(viewport={"width": 1180, "height": 940})
                 page.route("**/*", lambda route: route.abort())
-                page.set_content((self.manager.root / "fixtures/controlled_browser/task.html").read_text())
+                page.set_content(
+                    (self.manager.root / "fixtures/controlled_browser/task.html").read_text(encoding="utf-8")
+                )
                 page.evaluate("layout => document.body.dataset.layout = layout", self.state["layout"])
 
                 def before_input():

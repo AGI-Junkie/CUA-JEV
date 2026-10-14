@@ -147,6 +147,27 @@ class ScreenController:
         pyautogui.click()
         time.sleep(self.pause_s)
 
+    def guarded_scroll_point(
+        self, lease: WindowLease, x: float, y: float, ticks: int,
+        *, before_scroll: Callable[[], None] | None = None,
+    ) -> None:
+        """Deliver wheel input only after moving within the selected window."""
+        if type(ticks) is not int or ticks not in {-3, -2, -1, 1, 2, 3}:
+            raise ValueError("scroll requires 1-3 signed ticks")
+        x, y = round(x), round(y)
+        lease.validate_point(x, y)
+        self.validate_window_lease(lease)
+        pyautogui, _ = self._modules()
+        pyautogui.moveTo(x, y, duration=self.move_s)
+        self.validate_window_lease(lease)
+        if before_scroll is not None:
+            before_scroll()
+        self.validate_window_lease(lease)
+        if tuple(pyautogui.position()) != (x, y):
+            raise RuntimeError("pointer moved away from the grounded scroll target")
+        pyautogui.scroll(ticks)
+        time.sleep(self.pause_s)
+
     def move_point(self, x: float, y: float) -> None:
         pyautogui, _ = self._modules()
         pyautogui.moveTo(round(x), round(y), duration=self.move_s)

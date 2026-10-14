@@ -1,0 +1,111 @@
+{
+  "source": "frozen-source local cloud regression, not remote CI",
+  "observed_at_utc": "2026-10-14T23:35:08.774894+00:00",
+  "base_head": "66a3210cfa0b88c6adb13357212a5658583af85c",
+  "implementation_and_tests_sha256": "c7a8ef4efcf8dd2fe7f36d3fc82db026f9dee84b1256b606944de46154553a85",
+  "tests": 471,
+  "passed": 468,
+  "failures": 0,
+  "errors": 0,
+  "skipped": [
+    {
+      "classname": "tests.test_open_browser",
+      "name": "test_real_browser_snapshot_and_dom_execution_without_external_site",
+      "reason": "Edge browser unavailable: Error"
+    },
+    {
+      "classname": "tests.test_suites",
+      "name": "test_edge_task_completes_real_dom_and_download_cycle",
+      "reason": "the system Edge channel is a Windows demo dependency"
+    },
+    {
+      "classname": "tests.test_suites",
+      "name": "test_excel_task_completes_real_workbook_cycle",
+      "reason": "set CUA_JEV_RUN_EXCEL_INTEGRATION=1 on a Windows host with desktop Excel"
+    }
+  ],
+  "duration_seconds": 106.9,
+  "strict_browser_gate": "passed",
+  "actual_ui_checks": 19,
+  "dataflow": "docs/evidence/ci-live-review-browser-summary.json",
+  "prior_remote_ci": {
+    "head": "66a3210cfa0b88c6adb13357212a5658583af85c",
+    "pr_run": "https://github.com/AGI-Junkie/CUA-JEV/actions/runs/38653835206",
+    "browser": {
+      "job": 116158772572,
+      "passed": 392,
+      "skipped": 2,
+      "strict_gate": "passed",
+      "ui_checks": 19,
+      "artifact": "https://github.com/AGI-Junkie/CUA-JEV/actions/runs/38653835206/artifacts/11936290275"
+    },
+    "windows": {
+      "head": "66a3210cfa0b88c6adb13357212a5658583af85c",
+      "run_id": 38653835206,
+      "observed_jobs": [
+        {
+          "job_id": 116158772756,
+          "python": "3.11",
+          "url": "https://github.com/AGI-Junkie/CUA-JEV/actions/runs/38653835206/job/116158772756",
+          "unit_step_conclusion": "failure",
+          "failed": 56,
+          "passed": 296,
+          "skipped": 42
+        },
+        {
+          "job_id": 116158772778,
+          "python": "3.12",
+          "url": "https://github.com/AGI-Junkie/CUA-JEV/actions/runs/38653835206/job/116158772778",
+          "unit_step_conclusion": "failure",
+          "failed": 56,
+          "passed": 296,
+          "skipped": 42
+        }
+      ],
+      "failure_groups": {
+        "synthetic_window_reached_real_win32_or_passive_focus_fixture": 54,
+        "posix_mode_assertion_on_windows": 1,
+        "unicode_session_history_replay": 1
+      },
+      "fixture_fix_validation": {
+        "platform_neutral_affected_suites_passed": 107,
+        "simulated_win32_branch_affected_suites_passed": 107,
+        "simulated_win32_junit": "/tmp/cua-jev-windows-fixtures.xml",
+        "ruff": "passed",
+        "production_files_changed_by_fixture_fix": false,
+        "actual_windows_rerun_required": true,
+        "paid_api_calls": 0
+      }
+    },
+    "aggregate": "failure; Windows failures block merge"
+  },
+  "latest_review": {
+    "inline_threads_checked": 21,
+    "standalone_p1_checked": true,
+    "new_findings": 5,
+    "status": "reproduced, repaired and independently reviewed"
+  },
+  "new_regressions": {
+    "policy_startup": 40,
+    "stable_scene": 25,
+    "navigation": 9,
+    "windows_fixtures": 2,
+    "cp1252_history": 1
+  },
+  "old_code_reproductions": {
+    "policy_initial": "19 failures,4positivecontrols",
+    "cancel_or_timeout_retries": "7failures,0errors",
+    "stuck_actual_desktop": "8unverifiedsideeffects at maxsteps;fixed stops after3",
+    "navigation": "9old-failing cases",
+    "cp1252_history": "1failure,1positivecontrol"
+  },
+  "independent_review": "Windows/UTF8/navigation/stuck/runtime repairs reviewed separately; reentrant final-dispatch gap additionally reproduced and fixed; no remaining concrete finding",
+  "paid_api_calls": 0,
+  "private_screenshots_or_keys_accessed": false,
+  "actual_windows_headless_ci_rerun": "required on new head",
+  "windows_desktop_hardware_verified": false,
+  "real_model_quality_verified": false,
+  "new_head_remote_ci": "pending push and actual checks",
+  "merged_at_recording": false,
+  "post_test_cleanup": "Removed two trailing blank lines in test files; no executable changes."
+}
