@@ -24,10 +24,17 @@ from .executors.common import execute_with_receipt
 from .executors.screen import ScreenController
 from .local_tools import ScopedReadOnlyTools, ToolOffer, verify_readonly_tool_result
 from .models import ActionCandidate, ActionReceipt, Channel, Decision, Observation, Risk, Verification
-from .policy import DecisionPolicy
+from .policy import DecisionPolicy, public_scene_state
 from .runtime import StepResult
 from .verify import VerifierRegistry
-from .vision import VisualScene, VisualTarget, WindowImage, browser_viewport_image, changed_fraction
+from .vision import (
+    VisualScene,
+    VisualTarget,
+    WindowImage,
+    browser_viewport_image,
+    changed_fraction,
+    target_region_unchanged,
+)
 
 SELECTOR = "a[href],button,input,textarea,select,[role=button],[role=link],[role=textbox]"
 MAX_ELEMENTS = 60
@@ -344,8 +351,20 @@ class PublicDecisionPolicy:
         # scene summary and grounded target labels, but not verbatim visual text.
         public_state = {
             key: value for key, value in observation.state.items()
-            if key not in {"text", "visual_text", "tool_results"}
+            if key not in {"text", "visual_text", "tool_results", "plan_contract"}
         }
+        if "scene_state" in public_state:
+            public_state["scene_state"] = public_scene_state(public_state["scene_state"])
+        if observation.source == "open-desktop":
+            for key in ("window_handle", "visual_region", "visual_image_hash"):
+                public_state.pop(key, None)
+            public_state["controls"] = [{
+                key: item.get(key)
+                for key in ("ref", "name", "control_type", "enabled", "can_invoke", "can_set_text")
+            } for item in public_state.get("controls", [])]
+            public_state["visual_targets"] = [{
+                key: item.get(key) for key in ("ref", "label")
+            } for item in public_state.get("visual_targets", [])]
         if observation.source == "open-workspace":
             browser = public_state.get("browser", {})
             public_state = {
@@ -363,7 +382,9 @@ class PublicDecisionPolicy:
                         key: item.get(key) for key in ("ref", "label", "tag", "disabled")
                     } for item in browser.get("elements", [])],
                     "visual_summary": browser.get("visual_summary"),
-                    "visual_targets": browser.get("visual_targets", []),
+                    "visual_targets": [{
+                        "ref": item.get("ref"), "label": item.get("label"),
+                    } for item in browser.get("visual_targets", [])],
                 },
                 "desktop": {
                     "window_title": desktop.get("window_title"),
@@ -371,7 +392,9 @@ class PublicDecisionPolicy:
                         key: item.get(key) for key in ("ref", "name", "control_type", "enabled")
                     } for item in desktop.get("controls", [])],
                     "visual_summary": desktop.get("visual_summary"),
-                    "visual_targets": desktop.get("visual_targets", []),
+                    "visual_targets": [{
+                        "ref": item.get("ref"), "label": item.get("label"),
+                    } for item in desktop.get("visual_targets", [])],
                 },
                 "tool_offers": public_state.get("tool_offers", []),
                 "mcp_offers": public_state.get("mcp_offers", []),
@@ -813,13 +836,25 @@ class OpenBrowserTask:
                     != (current.region[2], current.region[3])
                     or candidate.arguments["visual_image_hash"]
                     != hashlib.sha256(self._visual_image.sample).hexdigest()
-                    or changed_fraction(self._visual_image.sample, current.sample) > 0.08
+                    or not target_region_unchanged(self._visual_image, current, target.box)
                 ):
                     raise RuntimeError("visual browser screenshot became stale")
-                self._before_images[decision_id] = current
                 _, _, width, height = current.region
                 left, top, right, bottom = target.box
-                self.page.mouse.click((left + right) * width / 2000, (top + bottom) * height / 2000)
+                x, y = (left + right) * width / 2000, (top + bottom) * height / 2000
+                # Hover may redraw a canvas control or expose an overlapping
+                # target. Recheck local pixels and DOM after moving, then press
+                # at that same point without a second implicit mouse movement.
+                self.page.mouse.move(x, y)
+                current = browser_viewport_image(self.page)
+                if not target_region_unchanged(self._visual_image, current, target.box):
+                    raise RuntimeError("visual browser screenshot became stale after pointer movement")
+                fresh = self._capture()
+                if fresh.fingerprint() != prior.fingerprint():
+                    raise RuntimeError("browser DOM changed after pointer movement")
+                self._before_images[decision_id] = replace(current, pixels=b"")
+                self.page.mouse.down()
+                self.page.mouse.up()
                 return {"url": self.page.url, "visual_target": target.ref}
             element = next((item for item in before.elements if item.ref == candidate.arguments["ref"]), None)
             if element is None or any(

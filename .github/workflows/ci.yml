@@ -1,23 +1,103 @@
 name: ci
 
-on:
+"on":
   push:
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  TYPESAFE_API_KEY: ""
+  CUA_JEV_MODEL_API_KEY: ""
+  CUA_JEV_PLANNER_API_KEY: ""
+  CUA_JEV_RUN_EXCEL_INTEGRATION: "0"
 
 jobs:
-  test:
+  python:
+    name: Python ${{ matrix.python }} / ${{ matrix.os }}
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.11", "3.12"]
+        python: ["3.11", "3.12"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
-      # The suite starts a real stdio MCP fixture, so CI must install the MCP extra.
-      - run: python -m pip install -e ".[dev,mcp]"
-      - run: ruff check .
-      - run: pytest --cov=cua_jev --cov-report=term-missing
+          python-version: ${{ matrix.python }}
+      - name: Install Python, UI and stdio MCP test dependencies
+        run: python -m pip install -e ".[dev,mcp,ui]"
+      - name: Static checks
+        run: python -m ruff check .
+      - name: Unit and platform-neutral integration tests
+        run: python -m pytest --cov=cua_jev --cov-report=term-missing --junitxml=artifacts/ci/python-tests.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: python-${{ matrix.os }}-${{ matrix.python }}
+          path: artifacts/ci/python-tests.xml
+          if-no-files-found: error
+          retention-days: 7
+
+  browser:
+    name: Browser and mocked data flow
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install all cloud test dependencies
+        run: python -m pip install -e ".[dev,mcp,ui,browser]"
+      - name: Install Chromium and expose it to mandatory browser tests
+        run: |
+          python -m playwright install --with-deps chromium
+          python scripts/ci_browser.py
+      - name: Static checks
+        run: |
+          python -m ruff check .
+          node --check src/cua_jev/ui/static/workbench.js
+      - name: Full regression suite with real Chromium and local mock models
+        run: python -m pytest --cov=cua_jev --cov-report=term-missing --junitxml=artifacts/ci/browser-tests.xml
+      - name: Reject unexpected skips or an empty browser suite
+        run: python scripts/check_ci_results.py artifacts/ci/browser-tests.xml
+      - name: Actual UI and cross-layout simulated model data flow
+        run: python scripts/ci_mock_regression.py --output artifacts/ci/data-flow
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-mock-evidence
+          path: artifacts/ci/
+          if-no-files-found: error
+          retention-days: 7
+
+  gate:
+    name: CI acceptance
+    if: always()
+    needs: [python, browser]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require every test job to succeed
+        env:
+          PYTHON_RESULT: ${{ needs.python.result }}
+          BROWSER_RESULT: ${{ needs.browser.result }}
+        run: |
+          test "$PYTHON_RESULT" = success
+          test "$BROWSER_RESULT" = success

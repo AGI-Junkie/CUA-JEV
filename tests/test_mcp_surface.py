@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from test_open_computer import BrowserPage, DesktopWindow
+from test_open_desktop import FakeDesktopScreen
 
 from cua_jev.artifact_surface import ArtifactSurface
 from cua_jev.cli import main
@@ -150,7 +151,7 @@ def test_real_mcp_file_read_joins_dom_and_uia_in_one_episode(tmp_path):
         ),
         desktop=OpenDesktopTask(
             goal=goal, window_title_re="Example", planner=planner,
-            window=DesktopWindow(), allow_button_actions=True,
+            window=DesktopWindow(), screen=FakeDesktopScreen(), allow_button_actions=True,
         ),
         mcp_surface=surface,
         required_url_contains="/done", required_window_title_contains="Done",

@@ -1,0 +1,48 @@
+{
+  "source": "Old HEAD implementations loaded in separate pytest processes; shared working checkout was never reverted",
+  "base_head": "9f3c759da43d114e1236e03ba397b34e3f121239",
+  "localized_desktop_and_rounded_input": {
+    "total_cases": 6,
+    "passed": 0,
+    "failures": 6,
+    "errors": 0,
+    "skipped": []
+  },
+  "browser_composite_and_privacy": {
+    "total_cases": 13,
+    "passed": 1,
+    "failures": 12,
+    "errors": 0,
+    "skipped": []
+  },
+  "session_recovery": {
+    "total_cases": 38,
+    "passed": 5,
+    "failures": 33,
+    "errors": 0,
+    "skipped": []
+  },
+  "slow_planning": {
+    "head": "9f3c759da43d114e1236e03ba397b34e3f121239",
+    "isolated_source": "/tmp/cua-jev-slow-planning-baseline-o7xjx27u/src",
+    "command": [
+      "/workspace/CUA-JEV/.venv/bin/python",
+      "-m",
+      "pytest",
+      "tests/test_observation_refresh.py",
+      "-k",
+      "slow_planner"
+    ],
+    "returncode": 1,
+    "expected_stale_guard_reproduced": true,
+    "log": "/tmp/cua-jev-slow-planning-baseline-o7xjx27u/baseline-failure.log",
+    "paid_api_calls": 0
+  },
+  "real_browser_cases": {
+    "count": 3,
+    "old_implementation": "all three emitted unintended canvas clicks; counter=1",
+    "new_implementation": "all three refused input; counter=0"
+  },
+  "old_failures_are_expected_reproductions": true,
+  "paid_api_calls": 0
+}

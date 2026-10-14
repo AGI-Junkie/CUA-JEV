@@ -1,0 +1,75 @@
+{
+  "source_commit": "aae289bd25d76436941c0f128a13d8f49bc58838",
+  "execution": "local equivalent of required browser CI; not a GitHub Actions run",
+  "tests": {
+    "passed": 255,
+    "skipped": 3,
+    "failed": 0
+  },
+  "skips": [
+    {
+      "module": "tests.test_open_browser",
+      "test": "test_real_browser_snapshot_and_dom_execution_without_external_site",
+      "reason": "Edge browser unavailable: Error"
+    },
+    {
+      "module": "tests.test_suites",
+      "test": "test_edge_task_completes_real_dom_and_download_cycle",
+      "reason": "the system Edge channel is a Windows demo dependency"
+    },
+    {
+      "module": "tests.test_suites",
+      "test": "test_excel_task_completes_real_workbook_cycle",
+      "reason": "set CUA_JEV_RUN_EXCEL_INTEGRATION=1 on a Windows host with desktop Excel"
+    }
+  ],
+  "ui_checks": [
+    "no dispatch before real browser preview",
+    "backend configuration ack and password inputs cleared",
+    "columns: actual backend PNG preview",
+    "columns: real GUI receipt, exact note verification, measured API counters",
+    "stacked: actual backend PNG preview",
+    "stacked: real GUI receipt, exact note verification, measured API counters",
+    "real backend action-budget failure shows recovery, never completion",
+    "scope revocation acknowledged by backend",
+    "reload restores authoritative active session, events and controls",
+    "dirty paused task stays blocked across polling until correction/new preview",
+    "unsupported task/observer correction cannot silently resume stale backend task",
+    "real paused worker takeover, correction, scope reconfirmation, resume completion",
+    "emergency stop waits for real backend stopped state",
+    "optional actual screenshot / simulated vision API / real visual-click receipt",
+    "backend facts/history shown read-only",
+    "mobile no horizontal overflow",
+    "no browser page errors",
+    "external browser requests blocked and never attempted"
+  ],
+  "page_errors": [],
+  "external_ui_requests": [],
+  "cross_layout": [
+    {
+      "layout": "columns",
+      "planner_calls": 1,
+      "jev_calls": 2,
+      "verified_steps": 2,
+      "layout_changed_between_actions": true,
+      "paid_api_calls": 0,
+      "external_network_requests": 0
+    },
+    {
+      "layout": "stacked",
+      "planner_calls": 1,
+      "jev_calls": 2,
+      "verified_steps": 2,
+      "layout_changed_between_actions": true,
+      "paid_api_calls": 0,
+      "external_network_requests": 0
+    }
+  ],
+  "model_mode": "explicit local HTTP mocks; no real model quality validation",
+  "github_actions": {
+    "runs": 0,
+    "check_runs": 0,
+    "state": "activation/management unavailable; no merge performed"
+  },
+  "windows_desktop_verified": false
+}

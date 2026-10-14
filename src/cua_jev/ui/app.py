@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import secrets
@@ -14,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ..config import load_local_env
 from .manager import TASK_CATALOG, RunManager
+from .workbench_api import attach_workbench_api
 
 
 def create_app(root: str | Path | None = None, data: str | Path | None = None):
@@ -26,7 +28,10 @@ def create_app(root: str | Path | None = None, data: str | Path | None = None):
 
     @asynccontextmanager
     async def lifespan(app):
-        yield
+        try:
+            yield
+        finally:
+            await asyncio.to_thread(app.state.workbench_sessions.close)
 
     app = FastAPI(title="CUA-JEV Console", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.manager = manager
@@ -78,6 +83,10 @@ def create_app(root: str | Path | None = None, data: str | Path | None = None):
     @app.get("/preview.html", response_class=HTMLResponse)
     def preview():
         return (static / "home.html").read_text(encoding="utf-8")
+
+    @app.get("/workbench", response_class=HTMLResponse)
+    def workbench():
+        return (static / "workbench.html").read_text(encoding="utf-8")
 
     @app.get("/early-work.html", response_class=HTMLResponse)
     def early_work():
@@ -165,6 +174,8 @@ def create_app(root: str | Path | None = None, data: str | Path | None = None):
             raise HTTPException(404, detail="run not found") from exc
         except ValueError as exc:
             raise HTTPException(400, detail=str(exc)) from exc
+
+    attach_workbench_api(app, root=project_root, data=manager.data / "workbench", csrf=token)
 
     return app
 

@@ -3,7 +3,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
-from test_open_desktop import FakeWindow
+from test_open_desktop import FakeDesktopScreen, FakeWindow
 
 from cua_jev.episode import EpisodeConfig, EpisodeRunner, EpisodeStatus
 from cua_jev.executors import ControlExecutor
@@ -119,7 +119,7 @@ def environment(tmp_path):
         ),
         desktop=OpenDesktopTask(
             goal=goal, window_title_re="Example", planner=planner,
-            window=DesktopWindow(), allow_button_actions=True,
+            window=DesktopWindow(), screen=FakeDesktopScreen(), allow_button_actions=True,
         ),
         local_tool_root=tmp_path,
         required_url_contains="/done", required_window_title_contains="Done",
@@ -410,7 +410,7 @@ def test_editor_style_text_goal_uses_private_live_edit_value():
         ),
         desktop=OpenDesktopTask(
             goal=goal, window_title_re="Example", planner=planner,
-            window=window, allow_text_input=True,
+            window=window, screen=FakeDesktopScreen(), allow_text_input=True,
         ),
         required_url_contains="/done", required_window_text_contains="Ada",
         required_capabilities=("desktop.fill",),
@@ -436,3 +436,320 @@ def test_editor_style_text_goal_uses_private_live_edit_value():
     assert after_edit.edit_values == ("Ada",)
     assert before_edit.fingerprint() != after_edit.fingerprint()
     assert "Ada" not in json.dumps(task._snapshot.to_dict()["desktop"])
+
+
+def test_desktop_click_without_effect_is_not_compiled_or_offered(tmp_path):
+    task = environment(tmp_path)
+    task.required_window_title_contains = ""
+    task.reset()
+    task.observe(())
+    task._plan = ComputerPlan.from_dict({
+        "options": [{"ref": "d:c0", "operation": "click"}],
+    }, task._snapshot)
+    provider = task.providers["d"]
+    provider.compile = lambda *args: pytest.fail("unverifiable desktop side effect must not compile")
+    assert task._build_candidates() == ()
+    assert task.desktop.window.title == "Example"
+    task.close()
+
+
+def test_desktop_click_explicit_effect_is_preserved_without_caller_gate(tmp_path):
+    task = environment(tmp_path)
+    task.required_window_title_contains = ""
+    task.reset()
+    task.observe(())
+    effect = {"kind": "window_title_contains", "value": "Done"}
+    task._plan = ComputerPlan.from_dict({
+        "options": [{"ref": "d:c0", "operation": "click", "expected": effect}],
+    }, task._snapshot)
+    assert all(item.expected == effect for item in task._build_candidates())
+    assert task._build_candidates()
+    task.close()
+
+
+def test_desktop_click_uses_unmet_text_gate_when_title_is_already_satisfied(tmp_path):
+    task = environment(tmp_path)
+    task.desktop.window.title = "Done"
+    task.required_window_text_contains = "Saved"
+    task.desktop.window.control.label = "Finish"
+    task.desktop.window.control.window_text = lambda: task.desktop.window.control.label
+    task.desktop.window.control.invoke = lambda: setattr(task.desktop.window.control, "label", "Saved")
+    task.reset()
+    task.observe(())
+    task._plan = ComputerPlan.from_dict({
+        "options": [{"ref": "d:c0", "operation": "click"}],
+    }, task._snapshot)
+    expected = {"kind": "text_contains", "value": "Saved"}
+    candidates = task._build_candidates()
+    assert candidates and all(item.expected == expected for item in candidates)
+    candidate = next(item for item in candidates if item.channel == Channel.API)
+    receipt = task(candidate, "observation", "decision")
+    verifiers = VerifierRegistry()
+    task.register_verifiers(verifiers)
+    assert receipt.success
+    assert verifiers.verify(candidate, receipt).passed
+    assert task.desktop.window.control.label == "Saved"
+    task.close()
+
+
+def test_desktop_click_satisfied_caller_gates_cannot_back_a_pending_browser_goal(tmp_path):
+    task = environment(tmp_path)
+    task.desktop.window.title = "Done"
+    task.required_window_text_contains = "Finish"
+    task.reset()
+    task.observe(())
+    assert not task._satisfied(task._snapshot)
+    task._plan = ComputerPlan.from_dict({
+        "options": [{"ref": "d:c0", "operation": "click"}],
+    }, task._snapshot)
+    task.providers["d"].compile = lambda *args: pytest.fail(
+        "already-observed window gates cannot justify another desktop side effect"
+    )
+    assert task._build_candidates() == ()
+    assert task.browser.page.url == "https://example.test/start"
+    task.close()
+
+
+@pytest.mark.parametrize("expected", [
+    {"kind": "window_title_contains", "value": "Example"},
+    {"kind": "text_contains", "value": "Finish"},
+    {"kind": "control_exists", "value": "Finish"},
+])
+def test_desktop_click_explicit_already_observed_effect_is_not_compiled(tmp_path, expected):
+    task = environment(tmp_path)
+    task.reset()
+    task.observe(())
+    task._plan = ComputerPlan.from_dict({"options": [{
+        "ref": "d:c0", "operation": "click", "expected": expected,
+    }]}, task._snapshot)
+    task.providers["d"].compile = lambda *args: pytest.fail(
+        "already-observed explicit effects cannot justify another desktop side effect"
+    )
+    assert task._build_candidates() == ()
+    task.close()
+
+
+def test_desktop_click_effect_becoming_satisfied_during_selection_cannot_dispatch(tmp_path):
+    task = environment(tmp_path)
+    task.reset()
+    task.observe(())
+    task._plan = ComputerPlan.from_dict({
+        "options": [{"ref": "d:c0", "operation": "click"}],
+    }, task._snapshot)
+    candidate = next(item for item in task._build_candidates() if item.channel == Channel.API)
+    task.desktop.window.title = "Done"
+    task.desktop.window.control.invoke = lambda: pytest.fail(
+        "an effect observed before dispatch cannot justify another side effect"
+    )
+    receipt = task(candidate, "observation", "decision")
+    assert not receipt.success
+    assert "already" in receipt.error
+    task.close()
+
+
+def test_alternate_desktop_effect_becoming_satisfied_cannot_dispatch(tmp_path):
+    task = environment(tmp_path)
+
+    class AlternateDesktopSurface:
+        def __init__(self, original):
+            self.original = original
+            self.effects = []
+
+        def __getattr__(self, name):
+            return getattr(self.original, name)
+
+        def execute(self, candidate, observation_id, decision_id):
+            return execute_with_receipt(
+                candidate, observation_id, decision_id,
+                lambda: (self.effects.append("desktop.click"), {})[1],
+            )
+
+    alternate = AlternateDesktopSurface(task.providers["d"])
+    task.providers["d"] = alternate
+    task.reset()
+    task.observe(())
+    task._plan = ComputerPlan.from_dict({
+        "options": [{"ref": "d:c0", "operation": "click"}],
+    }, task._snapshot)
+    candidate = next(item for item in task._build_candidates() if item.channel == Channel.API)
+    task.desktop.window.title = "Done"
+    receipt = task(candidate, "observation", "decision")
+    assert not alternate.effects
+    assert not receipt.success
+    assert "already" in receipt.error
+    task.close()
+
+
+def test_terminal_and_action_text_gates_share_independent_value_order(tmp_path):
+    task = environment(tmp_path)
+    task.desktop.window = FakeWindow()
+    task.desktop.allow_text_input = True
+    task.desktop.window.controls[0].value = "Ada"
+    task.required_window_title_contains = ""
+    task.required_window_text_contains = "Ada\nName"
+    task.required_capabilities = ()
+    task.reset()
+    task.observe(())
+    task._plan = ComputerPlan.from_dict({
+        "options": [{"ref": "d:c1", "operation": "click"}],
+    }, task._snapshot)
+    task.providers["d"].compile = lambda *args: pytest.fail(
+        "an independently observed multiline text gate cannot justify another side effect"
+    )
+    assert task._build_candidates() == ()
+    task.browser.page.url = "https://example.test/done"
+    task.observe(())
+    assert task._satisfied(task._snapshot)
+    task.close()
+
+
+def test_mixed_plan_cannot_prefer_redundant_desktop_click_over_pending_browser_action(tmp_path):
+    class Planner:
+        def plan(self, _goal, snapshot, _recent):
+            return ComputerPlan.from_dict({"options": [
+                {"ref": "d:c0", "operation": "click"},
+                {"ref": "b:e0", "operation": "click"},
+            ]}, snapshot)
+
+    task = environment(tmp_path)
+    task.planner = Planner()
+    task.required_capabilities = ()
+    task.desktop.window.title = "Done"
+    calls = []
+    task.desktop.window.control.invoke = lambda: calls.append("desktop.click")
+
+    def factory(item):
+        executors = ExecutorRegistry()
+        for channel, executor in item.executor_bindings().items():
+            executors.register(channel, executor)
+        executors.register(Channel.CONTROL, ControlExecutor())
+        verifiers = VerifierRegistry()
+        item.register_verifiers(verifiers)
+        return AgentRuntime(
+            policy=PublicDecisionPolicy(RulePolicy()),
+            guard=ActionGuard(allow_destructive=True),
+            executors=executors, verifiers=verifiers,
+        )
+
+    result = EpisodeRunner(factory, EpisodeConfig(max_steps=3)).run(task)
+    assert result.status == EpisodeStatus.SUCCESS, result.reason
+    assert [step.receipt.capability for step in result.steps] == ["browser.click"]
+    assert not calls
+
+
+def test_public_scene_binding_never_exposes_os_window_evidence():
+    class CapturePolicy:
+        def choose(self, observation, candidates):
+            self.state = observation.state
+            return RulePolicy().choose(observation, candidates)
+
+    inner = CapturePolicy()
+    policy = PublicDecisionPolicy(inner)
+    policy.choose(Observation("goal", "subgoal", {
+        "window_handle": 888, "visual_region": [10, 20, 300, 400],
+        "controls": [{"ref": "c0", "name": "Finish", "rectangle": [10, 20, 30, 40]}],
+        "visual_targets": [{"ref": "v0", "label": "Finish", "box": [1, 2, 3, 4]}],
+        "scene_state": {
+            "fingerprint": "opaque-scene-digest", "window_handle": 888,
+            "observed_at": 123.4,
+            "window_evidence": {"process_id": 999, "dpi": 144, "region": [10, 20, 300, 400]},
+        },
+    }, source="open-desktop"), [ActionCandidate("one", Channel.CONTROL, "control.noop", "No-op")])
+    assert inner.state["scene_state"] == {"fingerprint": "opaque-scene-digest"}
+    assert inner.state["controls"][0]["ref"] == "c0"
+    assert inner.state["visual_targets"] == [{"ref": "v0", "label": "Finish"}]
+    assert not any(key in json.dumps(inner.state) for key in (
+        "process_id", "window_handle", "window_evidence", "observed_at", "region", "dpi", "rectangle", "box",
+    ))
+
+
+def test_public_computer_visual_targets_keep_choice_semantics_without_locator_boxes():
+    class CapturePolicy:
+        def choose(self, observation, candidates):
+            self.state = observation.state
+            return RulePolicy().choose(observation, candidates)
+
+    inner = CapturePolicy()
+    policy = PublicDecisionPolicy(inner)
+    policy.choose(Observation("goal", "subgoal", {
+        "browser": {"visual_targets": [{"ref": "b:v0", "label": "Apply", "box": [1, 2, 3, 4]}]},
+        "desktop": {"visual_targets": [{"ref": "d:v0", "label": "Finish", "box": [5, 6, 7, 8]}]},
+    }, source="open-computer"), [ActionCandidate("one", Channel.CONTROL, "control.noop", "No-op")])
+    assert inner.state["browser"]["visual_targets"] == [{"ref": "b:v0", "label": "Apply"}]
+    assert inner.state["desktop"]["visual_targets"] == [{"ref": "d:v0", "label": "Finish"}]
+
+
+def test_browser_foreground_loss_allows_passive_desktop_observe_and_blocks_its_actions(tmp_path):
+    from cua_jev.safety import WindowLease
+
+    class FocusScreen:
+        foreground = False
+        focuses = 0
+
+        def ensure_foreground(self, handle):
+            if not self.foreground:
+                raise RuntimeError("selected window is not foreground")
+
+        def focus_handle(self, *args, **kwargs):
+            self.focuses += 1
+            pytest.fail("shared observation must not steal foreground")
+
+        def capture_window_lease(self, handle, *, require_foreground=True):
+            if require_foreground:
+                self.ensure_foreground(handle)
+            return WindowLease(handle, 1, (0, 0, 200, 200), 96)
+
+    task = environment(tmp_path)
+    task.desktop.screen = screen = FocusScreen()
+    task.reset()
+    observation = task.observe(())
+    assert observation.state["requirements"]["desktop_focus_available"] is False
+    task._plan = ComputerPlan.from_dict({"options": [
+        {"ref": "b:e0", "operation": "click"}, {"ref": "d:c0", "operation": "click"},
+    ]}, task._snapshot)
+    offered = task._build_candidates()
+    assert offered and all(not item.capability.startswith("desktop.") for item in offered)
+    assert screen.focuses == 0
+    screen.foreground = True
+    task.observe(())
+    assert task._desktop_focus_available
+    assert task.desktop._window_lease is not None
+    task.close()
+
+
+def test_passive_desktop_observation_keeps_lease_identity_binding(tmp_path, monkeypatch):
+    from cua_jev.safety import WindowLease
+
+    class PassiveScreen:
+        requests = []
+
+        def ensure_foreground(self, handle):
+            raise RuntimeError("selected window is not foreground")
+
+        def capture_window_lease(self, handle, *, require_foreground=True):
+            self.requests.append(require_foreground)
+            assert require_foreground is False
+            return WindowLease(handle, 17, (10, 20, 200, 200), 144)
+
+    task = environment(tmp_path)
+    task.desktop.screen = screen = PassiveScreen()
+    task.reset()
+    monkeypatch.setattr("cua_jev.open_desktop.sys.platform", "win32")
+    task.observe(())
+    assert screen.requests == [False]
+    lease = task.desktop._window_lease
+    assert lease.process_id == 17 and lease.dpi == 144
+    assert task.desktop.scene_state.window_evidence["foreground_checked"] is False
+    assert not task._desktop_focus_available
+    task.close()
+
+
+@pytest.mark.parametrize("kind", [{}, []])
+def test_computer_plan_malformed_effect_kind_is_controlled_rejection(tmp_path, kind):
+    task = environment(tmp_path)
+    task.reset()
+    task.observe(())
+    with pytest.raises(ValueError, match="postcondition"):
+        ComputerPlan.from_dict({"options": [{"ref": "d:c0", "operation": "click",
+            "expected": {"kind": kind, "value": "Done"}}]}, task._snapshot)
+    task.close()

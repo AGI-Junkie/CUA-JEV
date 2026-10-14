@@ -4,10 +4,12 @@ import ctypes
 import io
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 from ..errors import CapabilityUnavailable
+from ..safety import WindowLease
 from ..vision import WindowImage
 
 
@@ -81,18 +83,90 @@ class ScreenController:
             raise ValueError("window screenshot region is outside safe size bounds")
         pyautogui, _ = self._modules()
         image = pyautogui.screenshot(region=(left, top, width, height)).convert("RGB")
+        pixels = image.tobytes()
         sample = image.convert("L").resize((64, 64)).tobytes()
         image.thumbnail((1280, 1280))
         buffer = io.BytesIO()
         image.save(buffer, format="JPEG", quality=72)
-        return WindowImage(buffer.getvalue(), sample, region)
+        return WindowImage(buffer.getvalue(), sample, region, pixels)
 
     @staticmethod
     def ensure_foreground(handle: int) -> None:
         """Fail closed if another window has focus before a visual capture/click."""
-        foreground = int(ctypes.windll.user32.GetForegroundWindow())
+        get_foreground = ctypes.windll.user32.GetForegroundWindow
+        get_foreground.restype = ctypes.c_void_p
+        foreground = int(get_foreground() or 0)
         if foreground != int(handle):
             raise RuntimeError("selected window is not foreground")
+
+    def capture_window_lease(self, handle: int, *, require_foreground: bool = True) -> WindowLease:
+        """Read OS identity and geometry without changing foreground focus."""
+        user32 = ctypes.windll.user32
+        user32.IsWindow.argtypes = [ctypes.c_void_p]
+        user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+        if not user32.IsWindow(int(handle)):
+            raise RuntimeError("selected window no longer exists")
+        if require_foreground:
+            self.ensure_foreground(handle)
+        process_id = ctypes.c_ulong()
+        user32.GetWindowThreadProcessId(int(handle), ctypes.byref(process_id))
+        # RECT uses Windows LONG (32 bits even on a 64-bit process).
+        class Rect(ctypes.Structure):
+            _fields_ = [(name, ctypes.c_int32) for name in ("left", "top", "right", "bottom")]
+        user32.GetWindowRect.argtypes = [ctypes.c_void_p, ctypes.POINTER(Rect)]
+        rect = Rect()
+        if not user32.GetWindowRect(int(handle), ctypes.byref(rect)):
+            raise RuntimeError("cannot inspect selected window geometry")
+        dpi_fn = getattr(user32, "GetDpiForWindow", None)
+        if dpi_fn is None:
+            raise CapabilityUnavailable("Windows DPI inspection is unavailable")
+        dpi_fn.argtypes = [ctypes.c_void_p]
+        dpi_fn.restype = ctypes.c_uint
+        dpi = int(dpi_fn(int(handle)))
+        if not dpi or not process_id.value:
+            raise RuntimeError("cannot inspect selected window identity or DPI")
+        return WindowLease(int(handle), int(process_id.value),
+                           (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top), dpi)
+
+    def validate_window_lease(self, lease: WindowLease, *, max_age_s: float = 30) -> None:
+        lease.validate(self.capture_window_lease(lease.handle), max_age_s=max_age_s)
+
+    def guarded_click_point(
+        self, lease: WindowLease, x: float, y: float, *, before_click: Callable[[], None] | None = None
+    ) -> None:
+        x, y = round(x), round(y)
+        lease.validate_point(x, y)
+        self.validate_window_lease(lease)
+        pyautogui, _ = self._modules()
+        pyautogui.moveTo(x, y, duration=self.move_s)
+        # The foreground/geometry can change while moving the pointer.
+        self.validate_window_lease(lease)
+        if before_click is not None:
+            before_click()
+            self.validate_window_lease(lease)
+        pyautogui.click()
+        time.sleep(self.pause_s)
+
+    def guarded_scroll_point(
+        self, lease: WindowLease, x: float, y: float, ticks: int,
+        *, before_scroll: Callable[[], None] | None = None,
+    ) -> None:
+        """Deliver wheel input only after moving within the selected window."""
+        if type(ticks) is not int or ticks not in {-3, -2, -1, 1, 2, 3}:
+            raise ValueError("scroll requires 1-3 signed ticks")
+        x, y = round(x), round(y)
+        lease.validate_point(x, y)
+        self.validate_window_lease(lease)
+        pyautogui, _ = self._modules()
+        pyautogui.moveTo(x, y, duration=self.move_s)
+        self.validate_window_lease(lease)
+        if before_scroll is not None:
+            before_scroll()
+        self.validate_window_lease(lease)
+        if tuple(pyautogui.position()) != (x, y):
+            raise RuntimeError("pointer moved away from the grounded scroll target")
+        pyautogui.scroll(ticks)
+        time.sleep(self.pause_s)
 
     def move_point(self, x: float, y: float) -> None:
         pyautogui, _ = self._modules()

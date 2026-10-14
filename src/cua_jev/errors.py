@@ -10,6 +10,10 @@ class GuardRejected(CuaJevError):
     """The action guard rejected a candidate before execution."""
 
 
+class ObservationExpired(GuardRejected):
+    """The captured GUI evidence must be observed and bound again before input."""
+
+
 class CapabilityUnavailable(CuaJevError):
     """An optional platform capability is not installed or connected."""
 

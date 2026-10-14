@@ -1,0 +1,37 @@
+{
+  "source": "local cloud checkout; not GitHub-hosted CI",
+  "total_cases": 314,
+  "passed": 311,
+  "failures": 0,
+  "errors": 0,
+  "skipped": [
+    {
+      "classname": "tests.test_open_browser",
+      "name": "test_real_browser_snapshot_and_dom_execution_without_external_site",
+      "reason": "Edge browser unavailable: Error"
+    },
+    {
+      "classname": "tests.test_suites",
+      "name": "test_edge_task_completes_real_dom_and_download_cycle",
+      "reason": "the system Edge channel is a Windows demo dependency"
+    },
+    {
+      "classname": "tests.test_suites",
+      "name": "test_excel_task_completes_real_workbook_cycle",
+      "reason": "set CUA_JEV_RUN_EXCEL_INTEGRATION=1 on a Windows host with desktop Excel"
+    }
+  ],
+  "strict_browser_result_gate": "passed",
+  "ui_checks": 19,
+  "browser_dataflow_summary": "docs/evidence/review-fixes-browser-summary.json",
+  "screenshot": "docs/evidence/workbench-reviewed-vision.png",
+  "models": "explicit local HTTP mocks; actual Chromium GUI input",
+  "paid_api_calls": 0,
+  "external_ui_requests": 0,
+  "independent_review_focused_tests": 38,
+  "final_intermediate_effect_guard_focused_tests": 50,
+  "windows_desktop_live_verified": false,
+  "real_model_quality_verified": false,
+  "github_ci_verified": false,
+  "merged": false
+}

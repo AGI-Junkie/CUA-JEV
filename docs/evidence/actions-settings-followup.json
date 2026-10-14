@@ -1,0 +1,66 @@
+{
+  "observed_at_utc": "2026-10-14T23:23:56.527715+00:00",
+  "feature_parent_head": "a3bf79e0c73f93b3fe9197a1c6436ca180aaa493",
+  "main_head": "f22e41e24f8eaca09888862aa115c0d28ee7eb91",
+  "settings_screenshot": {
+    "source": "parent inspected owner screenshot; image not copied or transmitted",
+    "allow_all_actions_selected": true,
+    "require_full_sha_selected": false,
+    "fork_approval": "first-time contributors",
+    "save_confirmed": false
+  },
+  "validation": {
+    "tool": "upstream actionlint",
+    "version": "1.7.11",
+    "binary_sha256": "1ef54b3443db3e2c2ef3b82c565c328ce1d76420ae13e0df3676f936dfcdb77c",
+    "release_checksum_verified": true,
+    "original_main_and_feature_workflows": "zero parse/semantic/expression/context errors",
+    "new_probe_and_bootstrap": "zero errors, independent review passed",
+    "shellcheck_pyflakes": "unavailable, not run",
+    "probe_local_shell_smoke": "passed; not GitHub CI"
+  },
+  "public_workflow_pages": {
+    "ci.yml": "404",
+    "pages.yml": "404",
+    "actions": "No workflows found, 0 workflow runs",
+    "registered_or_disabled_state_confirmed": false
+  },
+  "workflow_get": {
+    "cli_endpoint": "GET repos/AGI-Junkie/CUA-JEV/actions/workflows",
+    "result": "Forbidden; no GitHub response body/headers",
+    "connector_endpoint": "known unsupported",
+    "no_enable_or_permissions_write_retry": true,
+    "no_denial_bypass": true
+  },
+  "concrete_gap": "main CI lacks workflow_dispatch; default-branch manual dispatch prerequisite missing; does not explain missing push/PR runs",
+  "diagnostic_probe": {
+    "path": ".github/workflows/actions-diagnostic.yml",
+    "permissions": {},
+    "checkout": false,
+    "external_actions": false,
+    "secrets_or_api_calls": false,
+    "project_code_execution": false,
+    "timeout_minutes": 2,
+    "acceptance_gate": false
+  },
+  "bootstrap": {
+    "pr": "https://github.com/AGI-Junkie/CUA-JEV/pull/2",
+    "head": "a02be41f085d0f1b7b3932f49583e386073ff816",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      ".github/workflows/pages.yml"
+    ],
+    "additions": 2,
+    "deletions": 2,
+    "purpose": "enable main CI manual dispatch; keep Pages manual to avoid deployment",
+    "merged": false,
+    "exception_to_ci_gate_authorized": false
+  },
+  "remote_ci_verified": false,
+  "functional_merge_performed": false,
+  "sources": [
+    "https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow",
+    "https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow",
+    "https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflows-in-forked-repositories"
+  ]
+}
