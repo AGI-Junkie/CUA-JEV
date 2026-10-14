@@ -1,8 +1,7 @@
 name: Publish showcase
 
 on:
-  push:
-    branches: [main]
+  # Publishing remains an explicit manual action during CI bootstrap.
   workflow_dispatch:
 
 permissions:
