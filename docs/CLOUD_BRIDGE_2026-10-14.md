@@ -1,6 +1,6 @@
 # CUA-JEV cloud bridge delivery · 2026-10-14
 
-This is the current delivery record. The earlier `CLOUD_HANDOFF_2026-10-14.md` describes the first checkpoint and is historical. Development remains local on `feat/persistent-jev-workbench`; no push, PR, merge or deployment was performed.
+This records the de0b1d5 delivery checkpoint. See [CI and authorized PR publishing](CLOUD_CI_2026-10-14.md) for the subsequent push/CI status. The earlier `CLOUD_HANDOFF_2026-10-14.md` describes the first checkpoint and is historical. Development remains local on `feat/persistent-jev-workbench`; at that checkpoint no push, PR, merge or deployment had been performed.
 
 ## What now runs
 
