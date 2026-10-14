@@ -7,7 +7,7 @@ from cua_jev.executors import ControlExecutor
 from cua_jev.guard import ActionGuard
 from cua_jev.models import Channel
 from cua_jev.open_browser import PublicDecisionPolicy
-from cua_jev.open_desktop import DesktopPlan, DesktopSnapshot, OpenDesktopTask
+from cua_jev.open_desktop import DesktopOption, DesktopPlan, DesktopSnapshot, OpenDesktopTask
 from cua_jev.policy import RulePolicy
 from cua_jev.registry import ExecutorRegistry
 from cua_jev.runtime import AgentRuntime
@@ -340,3 +340,32 @@ def test_visual_target_cannot_be_used_for_text_input():
             "subgoal": "Fill", "options": [{"ref": "v0", "operation": "fill", "value": "secret"}],
             "success": {"kind": "window_title_contains", "value": "Done"},
         }, snapshot)
+
+
+def test_visual_click_no_effect_cannot_be_proved_by_same_vision_text():
+    class NoEffectScreen(FakeVisualScreen):
+        def click_point(self, x, y):
+            self.clicks.append((x, y))
+
+    window = VisualFakeWindow()
+    screen = NoEffectScreen(window)
+    grounder = FakeSceneGrounder()
+    task = OpenDesktopTask(
+        goal="Finish the window", window_title_re="Example", window=window,
+        screen=screen, planner=FakeDesktopPlanner(),
+        allow_button_actions=True, allow_visual_clicks=True,
+        vision_grounder=grounder, allow_screenshot_upload=True,
+    )
+    task.reset()
+    task.observe(())
+    snapshot = task._snapshot
+    candidate = task.compile_option(snapshot, DesktopOption(
+        "v0", "click", "", {"kind": "text_contains", "value": "Finish"},
+    ), "Press Finish")[0]
+    receipt = task(candidate, "test-observation", "test-decision")
+    assert receipt.success
+    result = task._verify_effect(candidate, receipt)
+    assert not result.passed
+    assert grounder.calls == 1  # OCR/scene model is not a postcondition authority.
+    assert window.title == "Example"
+    task.close()

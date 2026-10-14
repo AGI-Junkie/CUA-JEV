@@ -14,6 +14,13 @@ from .errors import PolicyError
 from .models import ActionCandidate, Decision, Observation
 
 
+def public_scene_state(scene: object) -> dict:
+    """Expose only opaque observation binding; OS window evidence stays local."""
+    if not isinstance(scene, dict):
+        return {}
+    return {"fingerprint": scene["fingerprint"]} if isinstance(scene.get("fingerprint"), str) else {}
+
+
 class DecisionPolicy(Protocol):
     def choose(self, observation: Observation, candidates: Sequence[ActionCandidate]) -> Decision: ...
 

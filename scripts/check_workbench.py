@@ -182,6 +182,58 @@ with sync_playwright() as p:
             assert any(e["type"] == "verification" and e["data"]["passed"] for e in batch["events"])
             checks.append(f"{layout}: real GUI receipt, exact note verification, measured API counters")
             page.screenshot(path=str(root / f"workbench-completed-{layout}.png"), full_page=True)
+        # A dropped start request must leave confirmed scope recoverable after reload.
+        page.fill("#note-text", "Recovered ready session note")
+        page.click("#preview")
+        expect(page.locator("#status")).to_have_text("请确认受控浏览器视口范围", timeout=20000)
+        ready_id = track_session(page)
+        start_url = base_url + f"/api/workbench/sessions/{ready_id}/start"
+        posted = []
+
+        def record_ready_requests(request):
+            if request.method == "POST" and request.url.startswith(
+                base_url + f"/api/workbench/sessions/{ready_id}/"
+            ):
+                posted.append(request.url.rsplit("/", 1)[1])
+
+        def drop_start(route):
+            route.abort("failed")
+
+        page.on("request", record_ready_requests)
+        page.route(start_url, drop_start)
+        page.check("#scope")
+        page.click("#start")
+        expect(page.locator("#recovery")).to_be_visible(timeout=10000)
+        ready_state = wait_session(
+            page.request,
+            ready_id,
+            lambda state: state["status"] == "ready" and not state.get("command_pending"),
+            "confirmed scope after interrupted start request",
+        )
+        assert ready_state["scope_confirmed"]
+        assert posted == ["confirm", "start"]
+        before_resume = page.request.get(base_url + f"/api/workbench/sessions/{ready_id}/events").json()[
+            "events"
+        ]
+        assert not any(event["type"] in {"model_request", "receipt"} for event in before_resume)
+        page.unroute(start_url, drop_start)
+        page.reload()
+        expect(page.locator("#status")).to_have_text("范围已确认", timeout=10000)
+        expect(page.locator("#scope-text")).to_contain_text(ready_id)
+        expect(page.locator("#scope")).to_be_checked()
+        page.click("#start")
+        expect(page.locator("#status")).to_have_text("已完成 · 后置条件通过", timeout=25000)
+        assert posted == ["confirm", "start", "start"], posted
+        completed_events = page.request.get(base_url + f"/api/workbench/sessions/{ready_id}/events").json()[
+            "events"
+        ]
+        assert any(
+            event["type"] == "completion"
+            and event["data"]["actual"] == "Saved locally: Recovered ready session note"
+            for event in completed_events
+        )
+        page.remove_listener("request", record_ready_requests)
+        checks.append("interrupted start restores ready after reload and starts without duplicate confirm")
         page.click("[data-view=settings]")
         page.fill("#budget", "1")
         page.click("#settings-form button.primary")

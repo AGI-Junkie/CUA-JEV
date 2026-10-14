@@ -355,15 +355,17 @@ def test_real_screenshot_mock_vision_selects_and_verifies_visual_click(manager, 
 
 
 def test_vision_budget_refusal_is_visible_and_dom_verifies_completed_effect(manager):
-    manager.configuration.update({"limits": {"max_model_attempts": 7}})
+    # A sequential plan spends one planner call, two Jev calls and four vision calls.
+    # Refuse the final vision call while retaining independent DOM completion proof.
+    manager.configuration.update({"limits": {"max_model_attempts": 6}})
     sid = create(manager, observe_mode="mock_vision")
     start(manager, sid)
     state = wait(manager, sid, "completed")
     counters = state["counters"]
-    assert counters["model_attempts"] == 7
+    assert counters["model_attempts"] == 6
     assert counters["vision"]["failures"] == 1
-    assert counters["vision"]["calls"] == counters["attempts_by_role"]["vision"] == 4
-    assert counters["vision"]["attempts"] == 5  # Last invocation refused before transport work.
+    assert counters["vision"]["calls"] == counters["attempts_by_role"]["vision"] == 3
+    assert counters["vision"]["attempts"] == 4  # Last invocation refused before transport work.
     events = manager.events(sid)["events"]
     assert len([e for e in events if e["type"] == "receipt"]) == 2
     completion = next(e for e in events if e["type"] == "completion")
@@ -474,3 +476,34 @@ def test_no_fresh_candidates_requests_recovery_without_blind_input(manager, monk
     completed = wait(manager, sid, "completed")
     assert completed["counters"]["jev"]["calls"] == 2
     assert completed["counters"]["steps"] == 2
+
+
+def test_pause_after_last_physical_action_resumes_via_safe_control_done(manager, monkeypatch):
+    from cua_jev.open_desktop import OpenDesktopTask
+
+    original_evaluate = OpenDesktopTask.evaluate
+    pause_once = [True]
+
+    def pause_after_goal(task, *args, **kwargs):
+        result = original_evaluate(task, *args, **kwargs)
+        if result.success and pause_once[0]:
+            pause_once[0] = False
+            session = next(iter(manager._sessions.values()))
+            session.command("pause", {})
+        return result
+
+    monkeypatch.setattr(OpenDesktopTask, "evaluate", pause_after_goal)
+    manager.configuration.update({"limits": {"max_steps": 2}})
+    sid = create(manager)
+    start(manager, sid)
+    paused = wait(manager, sid, "paused")
+    assert paused["counters"]["steps"] == 2
+    assert not any(e["type"] == "completion" for e in manager.events(sid)["events"])
+    manager.command(sid, "resume")
+    completed = wait(manager, sid, "completed")
+    receipts = [e["data"] for e in manager.events(sid)["events"] if e["type"] == "receipt"]
+    assert [r["capability"] for r in receipts] == ["desktop.fill", "desktop.click", "control.done"]
+    assert all(r["success"] for r in receipts)
+    assert completed["counters"]["steps"] == 2  # Finalize sends no physical input.
+    assert completed["counters"]["jev"]["calls"] == 3
+    assert sum(e["type"] == "completion" for e in manager.events(sid)["events"]) == 1

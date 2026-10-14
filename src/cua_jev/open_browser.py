@@ -24,7 +24,7 @@ from .executors.common import execute_with_receipt
 from .executors.screen import ScreenController
 from .local_tools import ScopedReadOnlyTools, ToolOffer, verify_readonly_tool_result
 from .models import ActionCandidate, ActionReceipt, Channel, Decision, Observation, Risk, Verification
-from .policy import DecisionPolicy
+from .policy import DecisionPolicy, public_scene_state
 from .runtime import StepResult
 from .verify import VerifierRegistry
 from .vision import VisualScene, VisualTarget, WindowImage, browser_viewport_image, changed_fraction
@@ -346,6 +346,18 @@ class PublicDecisionPolicy:
             key: value for key, value in observation.state.items()
             if key not in {"text", "visual_text", "tool_results", "plan_contract"}
         }
+        if "scene_state" in public_state:
+            public_state["scene_state"] = public_scene_state(public_state["scene_state"])
+        if observation.source == "open-desktop":
+            for key in ("window_handle", "visual_region", "visual_image_hash"):
+                public_state.pop(key, None)
+            public_state["controls"] = [{
+                key: item.get(key)
+                for key in ("ref", "name", "control_type", "enabled", "can_invoke", "can_set_text")
+            } for item in public_state.get("controls", [])]
+            public_state["visual_targets"] = [{
+                key: item.get(key) for key in ("ref", "label")
+            } for item in public_state.get("visual_targets", [])]
         if observation.source == "open-workspace":
             browser = public_state.get("browser", {})
             public_state = {

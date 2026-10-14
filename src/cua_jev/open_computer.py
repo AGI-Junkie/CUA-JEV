@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -17,6 +18,7 @@ from urllib.parse import urldefrag
 
 from .artifact_surface import ArtifactState, ArtifactSurface
 from .episode import Evaluation
+from .executors.screen import ScreenController
 from .local_tools import ScopedReadOnlyTools, ToolOffer
 from .mcp_surface import McpCallOffer, McpToolSurface
 from .models import ActionCandidate, ActionReceipt, Channel, Observation, Verification
@@ -155,6 +157,7 @@ class ComputerPlan:
             expected = item.get("expected", {})
             if not isinstance(expected, dict) or (expected and (
                 namespace != "d"
+                or not isinstance(expected.get("kind"), str)
                 or expected.get("kind") not in {
                     "window_title_contains", "text_contains", "control_exists"
                 }
@@ -254,6 +257,7 @@ class OpenComputerTask:
         self.browser = browser
         if titles:
             self.browser.link_hints = titles
+        self._desktop_focus_available = True
         self.desktop = desktop
         self.planner = planner
         self.local_tools = ScopedReadOnlyTools(local_tool_root) if local_tool_root else None
@@ -420,18 +424,39 @@ class OpenComputerTask:
             providers=self.providers,
         )
 
+    def _observe_desktop(self, history: Sequence[StepResult]) -> DesktopSnapshot | None:
+        provider = self.providers.get("d")
+        self._desktop_focus_available = True
+        if provider is None:
+            return None
+        if isinstance(provider, WindowsUiaSurface):
+            task = provider.task
+            # A headed browser may legitimately become foreground. Read UIA only
+            # until the user reselects the desktop; never focus it automatically.
+            if sys.platform == "win32" or not isinstance(task.screen, ScreenController):
+                try:
+                    task.screen.ensure_foreground(int(task.window.handle))
+                except RuntimeError:
+                    self._desktop_focus_available = False
+                    task.observe(history, vision=False)
+                    return task._snapshot
+        return provider.observe(history)
+
     def observe(self, history: Sequence[StepResult]) -> Observation:
         browser = self.providers["b"].observe(history)
         self._record_visit(browser)
+        desktop = self._observe_desktop(history)
+        requirements = self._requirements(browser)
+        requirements["desktop_focus_available"] = self._desktop_focus_available
         self._snapshot = ComputerSnapshot(
             browser=browser,
-            desktop=self.providers["d"].observe(history) if "d" in self.providers else None,
+            desktop=desktop,
             tool_offers=self._active_tool_offers(),
             mcp_offers=self._active_mcp_offers(browser),
             artifact=self.providers["a"].observe(history) if "a" in self.providers else None,
             source_records=self._source_records(),
             tool_results=tuple(self._tool_results[-6:]),
-            requirements=self._requirements(browser),
+            requirements=requirements,
             providers=self.providers,
         )
         return Observation(
@@ -512,16 +537,22 @@ class OpenComputerTask:
         if self._plan is None or self._plan_fingerprint != self._snapshot.fingerprint():
             self._call_planner(history)
         result = self._build_candidates()
+        if not result and not self._desktop_focus_available:
+            raise ValueError("selected desktop is not foreground; reselect its window to continue")
         if not result:
             self._call_planner(
                 history,
                 feedback=(
                     "The last plan compiled to zero legal actions. Do not choose a completed "
                     "tool, a self-link, or an action outside the configured origin. Choose a "
-                    "different live ref that advances pending_visits or other unmet requirements."
+                    "different live ref that advances pending_visits or other unmet requirements. "
+                    "Desktop non-fill actions require an explicit independently readable expected "
+                    "postcondition or a configured caller window gate."
                 ),
             )
             result = self._build_candidates()
+        if not result and not self._desktop_focus_available:
+            raise ValueError("selected desktop is not foreground; reselect its window to continue")
         if not result:
             offered = [(option.source, option.ref, option.operation) for option in self._plan.options]
             raise ValueError(f"planner offered no executable actions: {offered}")
@@ -541,19 +572,24 @@ class OpenComputerTask:
                 for record in self._visits.values()
             ):
                 continue
+            if option.source == "d" and not self._desktop_focus_available:
+                continue
+            expected = option.expected
+            if option.source == "d" and option.operation != "fill":
+                if not expected and self.required_window_title_contains:
+                    expected = {"kind": "window_title_contains", "value": self.required_window_title_contains}
+                if not expected and self.required_window_text_contains:
+                    expected = {"kind": "text_contains", "value": self.required_window_text_contains}
+                if not expected:
+                    # Without an independent effect declaration, this would apply
+                    # a side effect whose verifier must fail and invite repetition.
+                    continue
             provider = self.providers[option.source]
             candidates = provider.compile(
                 self._snapshot.state_for(option.source), option.ref,
                 option.operation, option.value, self._plan.subgoal, index,
             )
             if option.source == "d" and option.operation != "fill":
-                expected = option.expected
-                if not expected and self.required_window_title_contains:
-                    expected = {
-                        "kind": "window_title_contains", "value": self.required_window_title_contains,
-                    }
-                if not expected and self.required_window_text_contains:
-                    expected = {"kind": "text_contains", "value": self.required_window_text_contains}
                 candidates = tuple(replace(item, expected=expected) for item in candidates)
             if option.source == "m" and self.mcp_current_page_only and candidates and (
                 candidates[0].arguments.get("arguments", {}).get("href")

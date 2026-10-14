@@ -97,14 +97,15 @@ class ScreenController:
         if foreground != int(handle):
             raise RuntimeError("selected window is not foreground")
 
-    def capture_window_lease(self, handle: int) -> WindowLease:
+    def capture_window_lease(self, handle: int, *, require_foreground: bool = True) -> WindowLease:
         """Read OS identity and geometry without changing foreground focus."""
         user32 = ctypes.windll.user32
         user32.IsWindow.argtypes = [ctypes.c_void_p]
         user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
         if not user32.IsWindow(int(handle)):
             raise RuntimeError("selected window no longer exists")
-        self.ensure_foreground(handle)
+        if require_foreground:
+            self.ensure_foreground(handle)
         process_id = ctypes.c_ulong()
         user32.GetWindowThreadProcessId(int(handle), ctypes.byref(process_id))
         # RECT uses Windows LONG (32 bits even on a 64-bit process).

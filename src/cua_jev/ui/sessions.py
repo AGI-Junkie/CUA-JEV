@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import queue
 import shutil
 import threading
@@ -19,8 +20,10 @@ from typing import Any
 import httpx
 
 from ..controlled_browser import BrowserScreen, BrowserWindow
+from ..executors.control import ControlExecutor
 from ..guard import ActionGuard
 from ..model_planner import ChatModelPlanner
+from ..models import Channel
 from ..open_desktop import OpenDesktopTask
 from ..policy import JevPolicy
 from ..registry import ExecutorRegistry
@@ -30,6 +33,24 @@ from ..trace import JsonlTrace
 from ..verify import VerifierRegistry
 
 TERMINAL = {"stopped", "completed", "failed"}
+
+
+def _validate_note(value):
+    # The lab uses a single-line HTML input and rendered text for exact verification.
+    if (
+        not isinstance(value, str)
+        or not 1 <= len(value) <= 120
+        or value != value.strip()
+        or "  " in value
+        or any(
+            (char.isspace() and char != " ")
+            or ord(char) < 32
+            or ord(char) == 127
+            or 0xD800 <= ord(char) <= 0xDFFF
+            for char in value
+        )
+    ):
+        raise ValueError("note_text requires 1-120 single-line characters with single internal spaces")
 
 
 class _SessionTrace(JsonlTrace):
@@ -43,12 +64,12 @@ class _SessionTrace(JsonlTrace):
         if kind in {"decision", "jev_decision"}:
             self.session.update(current_action={"stage": "proposed", **payload})
         elif kind == "receipt":
-            self.session.update(
-                current_action={
-                    "stage": "input_delivered" if payload.get("success") else "input_failed",
-                    **payload,
-                }
+            stage = (
+                ("control_completed" if payload.get("channel") == "control" else "input_delivered")
+                if payload.get("success")
+                else "input_failed"
             )
+            self.session.update(current_action={"stage": stage, **payload})
         elif kind == "verification":
             self.session.update(
                 current_action={"stage": "verified" if payload.get("passed") else "unverified", **payload}
@@ -89,8 +110,9 @@ class ControlledSessionManager:
         for key in ("task", "note_text"):
             if not isinstance(payload.get(key), str) or not payload[key].strip():
                 raise ValueError(f"{key} is required")
-        if len(payload["task"]) > 2000 or len(payload["note_text"]) > 120:
-            raise ValueError("task must be <=2000 characters and note_text <=120 characters")
+        _validate_note(payload["note_text"])
+        if len(payload["task"]) > 2000:
+            raise ValueError("task must be <=2000 characters")
         if not isinstance(payload.get("context", ""), str) or len(payload.get("context", "")) > 4000:
             raise ValueError("context must be text <=4000 characters")
         if payload.get("layout", "columns") not in {"columns", "stacked"}:
@@ -205,12 +227,24 @@ class _Session:
         with self.lock:
             return copy.deepcopy(self.state)
 
+    def _sync_directory(self):
+        if os.name == "posix":
+            descriptor = os.open(self.directory, os.O_RDONLY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+
     def update(self, **values):
         with self.lock:
             self.state.update(values)
             temporary = self.directory / "session.tmp"
-            temporary.write_text(json.dumps(self.state, ensure_ascii=False), encoding="utf-8")
+            with temporary.open("w", encoding="utf-8") as file:
+                file.write(json.dumps(self.state, ensure_ascii=False))
+                file.flush()
+                os.fsync(file.fileno())
             temporary.replace(self.directory / "session.json")
+            self._sync_directory()
 
     def event(self, kind, data):
         with self.lock:
@@ -220,15 +254,18 @@ class _Session:
                 "at": time.time(),
                 "data": copy.deepcopy(data),
             }
-            self.events.append(event)
             with (self.directory / "events.jsonl").open("a", encoding="utf-8") as file:
                 file.write(json.dumps(event, ensure_ascii=False) + "\n")
+                file.flush()
+                os.fsync(file.fileno())
+            self._sync_directory()
+            self.events.append(event)
 
     def status(self, status, **values):
         # State cannot become terminal before its final factual lifecycle event.
         with self.lock:
-            self.update(status=status, **values)
             self.event("lifecycle", {"status": status, **values})
+            self.update(status=status, **values)
 
     def command(self, action, payload):
         with self.lock:
@@ -257,8 +294,7 @@ class _Session:
                 if set(payload) - {"note_text", "context", "layout"}:
                     raise ValueError("Correction supports note_text, context and layout only")
                 note = payload.get("note_text", self.state["note_text"])
-                if not isinstance(note, str) or not note.strip() or len(note) > 120:
-                    raise ValueError("note_text must contain 1-120 characters")
+                _validate_note(note)
                 if payload.get("layout", self.state["layout"]) not in {"columns", "stacked"}:
                     raise ValueError("unsupported layout")
                 if not isinstance(payload.get("context", ""), str) or len(payload.get("context", "")) > 4000:
@@ -301,8 +337,6 @@ class _Session:
         self.update(frame_url=f"/api/workbench/sessions/{self.id}/frame?v={version}")
 
     def run(self):
-        from playwright.sync_api import sync_playwright
-
         from .configuration import BudgetLedger, RunLimits
 
         limits = self.configuration.limits if self.configuration else RunLimits()
@@ -314,6 +348,8 @@ class _Session:
         task = None
         failure = None
         try:
+            from playwright.sync_api import sync_playwright
+
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(
                     executable_path=shutil.which("chromium"), headless=True, args=["--no-sandbox"]
@@ -322,6 +358,7 @@ class _Session:
                 page.route("**/*", lambda route: route.abort())
                 page.set_content((self.manager.root / "fixtures/controlled_browser/task.html").read_text())
                 page.evaluate("layout => document.body.dataset.layout = layout", self.state["layout"])
+
                 def before_input():
                     if ledger is None:
                         raise RuntimeError("Input requires a started, confirmed session")
@@ -351,13 +388,17 @@ class _Session:
                         note = self.state["note_text"]
                         save_ref = controls["Save local note"]
                         if self.state["observe_mode"] == "mock_vision":
-                            targets = [target for target in supplied["snapshot"]["visual_targets"]
-                                       if target["label"] == "Save local note"]
+                            targets = [
+                                target
+                                for target in supplied["snapshot"]["visual_targets"]
+                                if target["label"] == "Save local note"
+                            ]
                             if len(targets) != 1:
                                 raise RuntimeError("No unambiguous fresh visual save target")
                             save_ref = targets[0]["ref"]
                         raw = {
                             "subgoal": "Fill and save the requested note in the controlled lab",
+                            "mode": "sequential",
                             "options": [
                                 {"ref": controls["Note text"], "operation": "fill", "value": note},
                                 {
@@ -467,7 +508,8 @@ class _Session:
                         allow_text_input=True,
                         allow_button_actions=True,
                         contract_path=self.directory / "plan.json",
-                        vision_grounder=vision, vision_mode="always",
+                        vision_grounder=vision,
+                        vision_mode="always",
                         allow_screenshot_upload=vision is not None,
                         allow_visual_clicks=vision is not None,
                     )
@@ -475,6 +517,7 @@ class _Session:
                 task = make_task()
                 task.reset()
                 registry = ExecutorRegistry()
+                registry.register(Channel.CONTROL, ControlExecutor())
                 verifiers = VerifierRegistry()
 
                 runtime = None
@@ -508,14 +551,19 @@ class _Session:
                         return {}
                     return {
                         **ledger.public(),
-                        "planner": {"calls": planner.planning_calls,
-                                    "attempts": planner.planning_attempts,
-                                    "latency_ms": planner.planning_wall_ms},
-                        "jev": dict(policy.metrics), "runtime": dict(runtime.metrics),
-                        "vision": {"attempts": vision.vision_attempts if vision else 0,
-                                   "failures": task.vision_failures,
-                                   "calls": vision.vision_calls if vision else 0,
-                                   "latency_ms": vision.vision_wall_ms if vision else 0},
+                        "planner": {
+                            "calls": planner.planning_calls,
+                            "attempts": planner.planning_attempts,
+                            "latency_ms": planner.planning_wall_ms,
+                        },
+                        "jev": dict(policy.metrics),
+                        "runtime": dict(runtime.metrics),
+                        "vision": {
+                            "attempts": vision.vision_attempts if vision else 0,
+                            "failures": task.vision_failures,
+                            "calls": vision.vision_calls if vision else 0,
+                            "latency_ms": vision.vision_wall_ms if vision else 0,
+                        },
                         "model_timing_complete": not runtime.policy_request_pending,
                     }
 
@@ -624,12 +672,12 @@ class _Session:
                             actual = page.locator("[role=status]").inner_text()
                             if actual != f"Saved locally: {self.state['note_text']}":
                                 raise RuntimeError("Exact note postcondition failed")
-                            self.event(
-                                "completion", {"actual": actual, "observer": "live DOM", "verified": True}
-                            )
                             with self.lock:
                                 if self.state["status"] != "running":
                                     continue
+                                self.event(
+                                    "completion", {"actual": actual, "observer": "live DOM", "verified": True}
+                                )
                                 browser.close()
                                 browser = None
                                 self.status("completed")

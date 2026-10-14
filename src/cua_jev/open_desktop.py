@@ -169,6 +169,7 @@ class DesktopPlan:
     options: tuple[DesktopOption, ...]
     success_kind: str
     success_value: str
+    mode: str = "alternatives"
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], snapshot: DesktopSnapshot) -> DesktopPlan:
@@ -176,6 +177,9 @@ class DesktopPlan:
             raise ValueError("desktop planner must return an options list")
         if not 1 <= len(data["options"]) <= MAX_OPTIONS:
             raise ValueError("desktop planner must return 1-16 options")
+        mode = data.get("mode", "alternatives")
+        if not isinstance(mode, str) or mode not in {"alternatives", "sequential"}:
+            raise ValueError("desktop plan mode must be alternatives or sequential")
         known = {item.ref: item for item in (*snapshot.controls, *snapshot.visual_targets)}
         options: list[DesktopOption] = []
         for item in data["options"]:
@@ -185,6 +189,7 @@ class DesktopPlan:
             if (
                 not isinstance(ref, str)
                 or ref not in known
+                or not isinstance(operation, str)
                 or operation not in {"click", "fill", "press", "scroll"}
             ):
                 raise ValueError("desktop planner referenced an unavailable control or operation")
@@ -201,7 +206,10 @@ class DesktopPlan:
             if not isinstance(expected, dict) or (
                 expected
                 and (
-                    expected.get("kind") not in {"window_title_contains", "text_contains", "control_exists"}
+                    not isinstance(expected.get("kind"), str)
+                    or expected.get("kind")
+                    not in {"window_title_contains", "text_contains", "control_exists"}
+                    or set(expected) != {"kind", "value"}
                     or not isinstance(expected.get("value"), str)
                     or not expected["value"]
                     or len(expected["value"]) > 160
@@ -234,22 +242,32 @@ class DesktopPlan:
             if operation in {"press", "scroll"} and not expected:
                 raise ValueError("navigation requires an expected postcondition")
             options.append(DesktopOption(ref, operation, value, expected))
+        if mode == "sequential" and any(
+            option.operation != "fill" and not option.expected for option in options[:-1]
+        ):
+            raise ValueError("intermediate sequential actions require an expected postcondition")
         if len({(item.ref, item.operation, item.value) for item in options}) != len(options):
             raise ValueError("desktop planner returned duplicate options")
         subgoal = data.get("subgoal")
         success = data.get("success")
         if not isinstance(subgoal, str) or not subgoal.strip() or len(subgoal) > 240:
             raise ValueError("desktop planner subgoal is invalid")
-        if not isinstance(success, dict) or success.get("kind") not in {
-            "window_title_contains",
-            "text_contains",
-            "control_exists",
-        }:
+        if (
+            not isinstance(success, dict)
+            or set(success) != {"kind", "value"}
+            or not isinstance(success.get("kind"), str)
+            or success.get("kind")
+            not in {
+                "window_title_contains",
+                "text_contains",
+                "control_exists",
+            }
+        ):
             raise ValueError("desktop planner success check is invalid")
         value = success.get("value")
         if not isinstance(value, str) or not value or len(value) > 160:
             raise ValueError("desktop planner success value is invalid")
-        return cls(subgoal.strip(), tuple(options), str(success["kind"]), value)
+        return cls(subgoal.strip(), tuple(options), str(success["kind"]), value, mode)
 
 
 class DesktopGoalPlanner(Protocol):
@@ -348,6 +366,10 @@ class OpenDesktopTask:
     def save_contract(self) -> None:
         if self.contract_path is None or self.plan_contract is None:
             return
+        if self.plan_contract.mode != "sequential":
+            # A newer alternatives plan must not leave an older resumable sequence.
+            self.contract_path.unlink(missing_ok=True)
+            return
         payload = {
             "version": 1,
             "goal": self.goal,
@@ -377,11 +399,17 @@ class OpenDesktopTask:
         if payload.get("version") != 1 or payload.get("goal") != self.goal:
             raise ValueError("persisted contract belongs to a different task or schema")
         contract = PlanContract.from_dict(payload["contract"])
+        if contract.mode != "sequential":
+            raise ValueError("only explicit sequential contracts can resume")
         used = payload.get("used")
-        if not isinstance(used, list) or any(
-            type(index) is not int or not 0 <= index < len(contract.options) for index in used
+        if (
+            not isinstance(used, list)
+            or any(type(index) is not int or not 0 <= index < len(contract.options) for index in used)
+            or used != list(range(len(used)))
         ):
-            raise ValueError("invalid persisted progress")
+            raise ValueError(
+                "invalid persisted progress; sequential progress must be a unique ordered prefix"
+            )
         self.plan_contract = contract
         self._plan = DesktopPlan(
             contract.subgoal,
@@ -391,6 +419,7 @@ class OpenDesktopTask:
             ),
             contract.success["kind"],
             contract.success["value"],
+            contract.mode,
         )
         self._used = set(used)
         self._snapshot = None
@@ -456,12 +485,21 @@ class OpenDesktopTask:
         return snapshot
 
     def observe(self, history: Sequence[StepResult], *, vision: bool = True) -> Observation:
+        if not vision and self.window is not None and sys.platform == "win32":
+            # Passive cross-app UIA observation retains identity/DPI/geometry
+            # binding. Foreground is required again before physical input.
+            self._window_lease = self.screen.capture_window_lease(
+                int(self.window.handle), require_foreground=False
+            )
         self._snapshot = self._capture(vision=vision)
         lease = self._window_lease
         self.scene_state = SceneState(
-            self._snapshot.window_handle, self._snapshot.fingerprint(),
+            self._snapshot.window_handle,
+            self._snapshot.fingerprint(),
             observed_at=lease.captured_at if lease else time.time(),
-            window_evidence={**vars(lease), "foreground_checked": True} if lease else {
+            window_evidence={**vars(lease), "foreground_checked": vision}
+            if lease
+            else {
                 "status": "platform-window-evidence-unavailable",
                 "foreground_checked": False,
             },
@@ -529,11 +567,46 @@ class OpenDesktopTask:
         self._used.clear()
         self.save_contract()
 
+    def _completed_prerequisites_hold(self, snapshot: DesktopSnapshot | None = None) -> bool:
+        """Old receipts cannot prove that preceding effects still hold now."""
+        if not self._used:
+            return True
+        scene = snapshot if snapshot is not None else self._snapshot
+        if self.plan_contract is None or scene is None:
+            return False
+        for index in self._used:
+            option = self.plan_contract.options[index]
+            if option.operation == "fill":
+                matches = [
+                    control
+                    for control in scene.controls
+                    if option.target.matches(control) and control.enabled
+                ]
+                if len(matches) != 1:
+                    return False
+                wrapper = self._handles.get(matches[0].ref)
+                read_value = getattr(wrapper, "get_value", None)
+                if not callable(read_value):
+                    return False
+                try:
+                    if read_value() != option.value:
+                        return False
+                except Exception:
+                    return False
+            elif not verify_postcondition(option.expected or self.plan_contract.success, scene):
+                # Click/navigation progress needs current independent effect evidence.
+                return False
+        return True
+
     def candidates(
         self, observation: Observation, history: Sequence[StepResult]
     ) -> Sequence[ActionCandidate]:
         if self._snapshot is None:
             raise RuntimeError("observe before candidate generation")
+        if not self._completed_prerequisites_hold():
+            self._plan = None
+            self.plan_contract = None
+            self._used.clear()
         if self._plan is None or self.plan_contract is None:
             self._call_planner(history)
         if self._satisfied(self._snapshot):
@@ -542,17 +615,33 @@ class OpenDesktopTask:
         if not result:
             self._call_planner(history)
             result = self._build_candidates()
-        return tuple(replace(candidate, arguments={
-            **candidate.arguments, "plan_contract_id": self.plan_contract.contract_id,
-        }) for candidate in result)
+        return tuple(
+            replace(
+                candidate,
+                arguments={
+                    **candidate.arguments,
+                    "plan_contract_id": self.plan_contract.contract_id,
+                },
+            )
+            for candidate in result
+        )
 
     def _build_candidates(self) -> tuple[ActionCandidate, ...]:
         assert self._snapshot is not None and self._plan is not None
         assert self.plan_contract is not None
+        if not self._completed_prerequisites_hold():
+            return ()
         bindings = self._compiler.bind(self.plan_contract, self._snapshot, self._used)
         result: list[ActionCandidate] = []
         for index, option in enumerate(self._plan.options):
             if index in self._used:
+                continue
+            if (
+                self._plan.mode == "sequential"
+                and index < len(self._plan.options) - 1
+                and option.operation != "fill"
+                and not option.expected
+            ):
                 continue
             target = bindings.get(index)
             if target is None:
@@ -637,6 +726,8 @@ class OpenDesktopTask:
                 self.screen.validate_window_lease(self._window_lease)
             before = self._capture()
             self._before[decision_id] = before
+            if not self._completed_prerequisites_hold(before):
+                raise RuntimeError("completed plan prerequisite changed before input")
             ref = candidate.arguments["ref"]
             if candidate.capability == "desktop.visual_click":
                 if self._snapshot is None or self._visual_image is None:
@@ -730,12 +821,10 @@ class OpenDesktopTask:
         before = self._before.get(receipt.decision_id)
         if before is None:
             return Verification(False, "desktop.effect", {"error": "missing pre-action snapshot"})
-        after = self._capture(
-            vision=(
-                candidate.capability == "desktop.visual_click"
-                and candidate.expected.get("kind") == "text_contains"
-            )
-        )
+        # Dispatch and independent verification must not share a vision model.
+        # UIA text/control/value evidence can prove the declared effect; model
+        # OCR/summary and image changes alone cannot.
+        after = self._capture()
         if candidate.capability == "desktop.visual_click":
             image = self._before_images.get(receipt.decision_id)
             if image is None:
@@ -798,4 +887,9 @@ class OpenDesktopTask:
         self.save_contract()
         if self._satisfied(self._capture()):
             return Evaluation(True, True, "goal_check_passed")
+        if self._plan is not None and self._plan.mode == "alternatives":
+            self._plan = None
+            self.plan_contract = None
+            self._used.clear()
+            return Evaluation(False, False, "alternative_verified_replan")
         return Evaluation(False, False, "action_verified")

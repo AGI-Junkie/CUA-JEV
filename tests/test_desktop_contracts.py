@@ -3,12 +3,40 @@
 import json
 import os
 import stat
+from dataclasses import replace
 
 import pytest
 from test_open_desktop import FakeDesktopPlanner, FakeWindow
 
-from cua_jev.desktop_contracts import PlanContract
+from cua_jev.desktop_contracts import PlanContract, verify_postcondition
 from cua_jev.open_desktop import DesktopPlan, OpenDesktopTask
+
+
+def test_intermediate_sequence_click_requires_effect_before_offer():
+    window = FakeWindow()
+    item = task(window)
+    snapshot = item.observe(())
+    with pytest.raises(ValueError, match="intermediate sequential"):
+        DesktopPlan.from_dict({
+            "subgoal": "Click then fill",
+            "mode": "sequential",
+            "options": [{"ref": "c1", "operation": "click"},
+                        {"ref": "c0", "operation": "fill", "value": "Ada"}],
+            "success": {"kind": "window_title_contains", "value": "Done"},
+        }, item._snapshot)
+    # Trusted adapter objects still pass through the same compiler restriction.
+    item.planner = SequentialPlanner([
+        {"ref": "c1", "operation": "click"},
+        {"ref": "c0", "operation": "fill", "value": "Ada"},
+    ])
+    assert item.candidates(snapshot, ()) == ()
+    assert window.controls[0].value == ""
+    assert window.window_text() == "Example"
+
+
+class SequentialPlanner(FakeDesktopPlanner):
+    def plan(self, goal, snapshot, recent_actions):
+        return replace(super().plan(goal, snapshot, recent_actions), mode="sequential")
 
 
 def task(window, planner=None, **kwargs):
@@ -27,7 +55,7 @@ def task(window, planner=None, **kwargs):
 
 def test_plan_reuses_semantics_across_fill_and_reordered_layout(tmp_path):
     window = FakeWindow()
-    planner = FakeDesktopPlanner(
+    planner = SequentialPlanner(
         [{"ref": "c0", "operation": "fill", "value": "Ada"}, {"ref": "c1", "operation": "click"}]
     )
     item = task(window, planner, contract_path=tmp_path / "contract.json")
@@ -148,7 +176,7 @@ def test_observation_does_not_expose_plan_input_values():
 def test_reset_resumes_durable_progress_but_requires_fresh_scene(tmp_path):
     path = tmp_path / "plan.json"
     window = FakeWindow()
-    original = task(window, contract_path=path)
+    original = task(window, SequentialPlanner(), contract_path=path)
     original.candidates(original.observe(()), ())
     resumed = task(window, contract_path=path, resume_contract=True)
     assert resumed._snapshot is None
@@ -215,8 +243,194 @@ def test_checkpoint_replacement_does_not_inherit_public_file_mode(tmp_path):
     path = tmp_path / "contract.json"
     path.write_text("old public file")
     path.chmod(0o644)
-    item = task(FakeWindow(), contract_path=path)
+    item = task(FakeWindow(), SequentialPlanner(), contract_path=path)
     item.candidates(item.observe(()), ())
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert json.loads(path.read_text())["contract"]["contract_id"] == item.plan_contract.contract_id
     assert list(tmp_path.iterdir()) == [path]
+
+
+def test_legacy_alternatives_do_not_execute_remaining_options_as_sequence(tmp_path):
+    window = FakeWindow()
+    planner = FakeDesktopPlanner(
+        [
+            {"ref": "c0", "operation": "fill", "value": "Ada"},
+            {"ref": "c1", "operation": "click"},
+        ]
+    )
+    item = task(window, planner, contract_path=tmp_path / "alternatives.json")
+    observation = item.observe(())
+    candidates = item.candidates(observation, ())
+    assert {candidate.arguments["operation"] for candidate in candidates} == {"fill", "click"}
+    fill = next(candidate for candidate in candidates if candidate.arguments["operation"] == "fill")
+    receipt = item(fill, observation.observation_id, "alternative")
+    verification = item._verify_effect(fill, receipt)
+    outcome = item.evaluate(observation, fill, receipt, verification)
+    assert outcome.reason == "alternative_verified_replan"
+    assert item._plan is None and item.plan_contract is None
+    assert not (tmp_path / "alternatives.json").exists()
+    item.candidates(item.observe(()), ())
+    assert planner.calls == 2
+
+
+def test_explicit_sequence_exposes_only_next_action_and_persists_mode(tmp_path):
+    window = FakeWindow()
+    planner = SequentialPlanner(
+        [
+            {"ref": "c0", "operation": "fill", "value": "Ada"},
+            {"ref": "c1", "operation": "click"},
+        ]
+    )
+    item = task(window, planner, contract_path=tmp_path / "sequence.json")
+    candidates = item.candidates(item.observe(()), ())
+    assert {candidate.arguments["operation"] for candidate in candidates} == {"fill"}
+    assert json.loads((tmp_path / "sequence.json").read_text())["contract"]["mode"] == "sequential"
+
+
+def test_desktop_parser_rejects_extra_postcondition_fields_and_invalid_mode():
+    item = task(FakeWindow())
+    snapshot = item.observe_state(())
+    raw = {
+        "subgoal": "Save",
+        "options": [{"ref": "c1", "operation": "click"}],
+        "success": {"kind": "window_title_contains", "value": "Done"},
+    }
+    with pytest.raises(ValueError, match="mode"):
+        DesktopPlan.from_dict({**raw, "mode": "ordered-ish"}, snapshot)
+    with pytest.raises(ValueError, match="expected"):
+        DesktopPlan.from_dict(
+            {
+                **raw,
+                "options": [
+                    {
+                        "ref": "c1",
+                        "operation": "click",
+                        "expected": {"kind": "text_contains", "value": "Saved", "extra": "ignored"},
+                    }
+                ],
+            },
+            snapshot,
+        )
+    with pytest.raises(ValueError, match="success"):
+        DesktopPlan.from_dict({**raw, "success": {**raw["success"], "extra": "ignored"}}, snapshot)
+
+
+def test_resume_rejects_legacy_ambiguous_contract_without_mode(tmp_path):
+    item = task(FakeWindow(), SequentialPlanner(), contract_path=tmp_path / "plan.json")
+    item.candidates(item.observe(()), ())
+    payload = json.loads((tmp_path / "plan.json").read_text())
+    del payload["contract"]["mode"]
+    (tmp_path / "plan.json").write_text(json.dumps(payload))
+    with pytest.raises(ValueError, match="contract"):
+        item.restore_contract()
+
+
+def test_alternatives_replan_invalidates_older_sequential_checkpoint(tmp_path):
+    path = tmp_path / "plan.json"
+    item = task(FakeWindow(), SequentialPlanner(), contract_path=path)
+    item.candidates(item.observe(()), ())
+    assert path.exists()
+    item.planner = FakeDesktopPlanner()
+    item._plan = None
+    item.candidates(item.observe(()), ())
+    assert item.plan_contract.mode == "alternatives"
+    assert not path.exists()
+
+
+def test_visual_text_cannot_independently_verify_expected_effect():
+    item = task(FakeWindow())
+    snapshot = replace(item.observe_state(()), visual_text=("Saved successfully",))
+    assert not verify_postcondition({"kind": "text_contains", "value": "Saved successfully"}, snapshot)
+
+
+def completed_fill_task(window, path):
+    planner = SequentialPlanner(
+        [
+            {"ref": "c0", "operation": "fill", "value": "Ada"},
+            {"ref": "c1", "operation": "click"},
+        ]
+    )
+    item = task(window, planner, contract_path=path)
+    observation = item.observe(())
+    candidate = item.candidates(observation, ())[0]
+    receipt = item(candidate, observation.observation_id, "completed-fill")
+    verification = item._verify_effect(candidate, receipt)
+    assert verification.passed
+    item.evaluate(observation, candidate, receipt, verification)
+    return item, planner
+
+
+@pytest.mark.parametrize("resume", [False, True])
+def test_changed_completed_fill_requires_replan_before_save(tmp_path, resume):
+    window = FakeWindow()
+    item, planner = completed_fill_task(window, tmp_path / "plan.json")
+    window.controls[0].value = ""
+    if resume:
+        planner = SequentialPlanner(
+            [
+                {"ref": "c0", "operation": "fill", "value": "Ada"},
+                {"ref": "c1", "operation": "click"},
+            ]
+        )
+        item = task(window, planner, contract_path=tmp_path / "plan.json", resume_contract=True)
+    calls_before = planner.calls
+    candidates = item.candidates(item.observe(()), ())
+    assert planner.calls == calls_before + 1
+    assert {candidate.arguments["operation"] for candidate in candidates} == {"fill"}
+    assert item._used == set()
+
+
+def test_unchanged_resumed_fill_reuses_plan_after_ref_reordering(tmp_path):
+    window = FakeWindow()
+    original, _ = completed_fill_task(window, tmp_path / "plan.json")
+    window.controls.reverse()
+    resumed = task(window, contract_path=tmp_path / "plan.json", resume_contract=True)
+    candidates = resumed.candidates(resumed.observe(()), ())
+    assert resumed.planner_calls == 0
+    assert resumed.plan_contract.contract_id == original.plan_contract.contract_id
+    assert {candidate.arguments["name"] for candidate in candidates} == {"Finish"}
+
+
+def test_ambiguous_completed_field_rejects_old_next_action(tmp_path):
+    window = FakeWindow()
+    item, _ = completed_fill_task(window, tmp_path / "plan.json")
+    window.controls.append(window.controls[0])
+    item.observe(())
+    assert item._build_candidates() == ()
+
+
+def test_completed_nonfill_requires_current_independent_effect(tmp_path):
+    from cua_jev.open_desktop import DesktopOption
+
+    window = FakeWindow()
+    item = task(window)
+    item.observe(())
+    item._plan = DesktopPlan(
+        "Continue",
+        (
+            DesktopOption("c1", "click", expected={"kind": "window_title_contains", "value": "Saved"}),
+            DesktopOption("c0", "fill", "Ada"),
+        ),
+        "window_title_contains",
+        "Done",
+        "sequential",
+    )
+    item.plan_contract = PlanContract.ground(item._plan, item._snapshot)
+    item._used = {0}
+    assert not item._completed_prerequisites_hold()
+    window.title = "Saved"
+    item.observe(())
+    assert item._completed_prerequisites_hold()
+    assert {candidate.arguments["operation"] for candidate in item._build_candidates()} == {"fill"}
+
+
+def test_completed_fill_changed_during_model_choice_blocks_dispatch(tmp_path):
+    window = FakeWindow()
+    item, _ = completed_fill_task(window, tmp_path / "plan.json")
+    observation = item.observe(())
+    candidate = item.candidates(observation, ())[0]
+    window.controls[0].value = ""
+    receipt = item(candidate, observation.observation_id, "stale-prerequisite")
+    assert not receipt.success
+    assert "prerequisite changed" in receipt.error
+    assert window.title == "Example"

@@ -18,6 +18,7 @@ def _valid_condition(value: Any, *, allow_empty: bool = False) -> bool:
     return (
         isinstance(value, dict)
         and set(value) == {"kind", "value"}
+        and isinstance(value["kind"], str)
         and value["kind"] in {"window_title_contains", "text_contains", "control_exists"}
         and isinstance(value["value"], str)
         and 0 < len(value["value"]) <= 160
@@ -67,6 +68,7 @@ class PlanContract:
     options: tuple[ContractOption, ...]
     success: dict[str, str]
     contract_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    mode: str = "alternatives"
 
     @classmethod
     def ground(cls, plan: Any, snapshot: Any) -> PlanContract:
@@ -84,6 +86,7 @@ class PlanContract:
                 for option in plan.options
             ),
             {"kind": plan.success_kind, "value": plan.success_value},
+            mode=plan.mode,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -101,6 +104,8 @@ class PlanContract:
             or not isinstance(data.get("contract_id"), str)
             or not data["contract_id"]
             or not _valid_condition(data.get("success"))
+            or not isinstance(data.get("mode"), str)
+            or data.get("mode") not in {"sequential", "alternatives"}
         ):
             raise ValueError("invalid persisted plan contract")
         for item in data["options"]:
@@ -137,6 +142,7 @@ class PlanContract:
             ),
             dict(data["success"]),
             data["contract_id"],
+            data["mode"],
         )
 
 
@@ -148,8 +154,11 @@ class FreshCandidateCompiler:
             return {}
         live = (*snapshot.controls, *snapshot.visual_targets)
         result = {}
+        next_index = next((index for index in range(len(contract.options)) if index not in used), None)
         for index, option in enumerate(contract.options):
             if index in used:
+                continue
+            if contract.mode == "sequential" and index != next_index:
                 continue
             matches = [
                 target
@@ -170,7 +179,13 @@ def verify_postcondition(expected: dict[str, str], snapshot: Any) -> bool:
     if kind == "window_title_contains":
         return folded in snapshot.window_title.casefold()
     if kind == "text_contains":
-        return folded in "\n".join((snapshot.text, *snapshot.visual_text)).casefold()
+        # Model-produced visual text cannot independently prove a model's effect.
+        independently_read = (
+            snapshot.text,
+            *snapshot.edit_values,
+            *(control.name for control in snapshot.controls),
+        )
+        return folded in "\n".join(independently_read).casefold()
     if kind == "control_exists":
         return any(folded in target.name.casefold() for target in snapshot.controls)
     return False

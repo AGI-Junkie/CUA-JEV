@@ -194,7 +194,8 @@ class ChatModelPlanner:
         elif isinstance(snapshot, DesktopSnapshot):
             medium = "Windows UI Automation"
             schema = (
-                '{"subgoal":"...","options":[{"ref":"c0 or v0","operation":"click|fill|press|scroll",'
+                '{"subgoal":"...","mode":"alternatives|sequential",'
+                '"options":[{"ref":"c0 or v0","operation":"click|fill|press|scroll",'
                 '"value":"fill text or navigation key/scroll ticks",'
                 '"expected":{"kind":"text_contains|control_exists|window_title_contains",'
                 '"value":"new observable effect"}}],'
@@ -231,7 +232,7 @@ class ChatModelPlanner:
         else:
             raise TypeError("unsupported observation type")
         instructions = (
-            f"You are the slow planner for a {medium} agent. Propose 1-16 alternative next "
+            f"You are the slow planner for a {medium} agent. Propose 1-16 bounded next "
             "actions grounded ONLY in the supplied current element refs. Return one JSON object "
             f"matching {schema}. Never return code, selectors, coordinates, shell commands, "
             "or invented refs. Keep actions minimal. The success condition must describe an "
@@ -245,6 +246,15 @@ class ChatModelPlanner:
                 "home, end, pageup, pagedown, or scroll ticks -3..-1/1..3 on Edit/Document/Pane/List/Tree. "
                 "Drag and arbitrary key chords are unsupported. Plans are semantically rebound "
                 "against fresh scenes across steps; never depend on old refs or rectangles."
+            )
+        if isinstance(snapshot, DesktopSnapshot):
+            instructions += (
+                " Use mode alternatives for mutually exclusive next actions; this is the default. "
+                "Use mode sequential only for an explicitly ordered, reusable multi-step subgoal. "
+                "Sequential options execute in list order with fresh semantic target binding; "
+                "never place alternatives such as Save and Cancel in the same sequence. "
+                "Each non-fill action needs an independently observable expected effect. "
+                "Expected conditions contain exactly kind and value."
             )
         if isinstance(snapshot, DesktopSnapshot) and snapshot.visual_targets:
             instructions += (

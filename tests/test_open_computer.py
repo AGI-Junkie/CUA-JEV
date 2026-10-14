@@ -436,3 +436,133 @@ def test_editor_style_text_goal_uses_private_live_edit_value():
     assert after_edit.edit_values == ("Ada",)
     assert before_edit.fingerprint() != after_edit.fingerprint()
     assert "Ada" not in json.dumps(task._snapshot.to_dict()["desktop"])
+
+
+def test_desktop_click_without_effect_is_not_compiled_or_offered(tmp_path):
+    task = environment(tmp_path)
+    task.required_window_title_contains = ""
+    task.reset()
+    task.observe(())
+    task._plan = ComputerPlan.from_dict({
+        "options": [{"ref": "d:c0", "operation": "click"}],
+    }, task._snapshot)
+    provider = task.providers["d"]
+    provider.compile = lambda *args: pytest.fail("unverifiable desktop side effect must not compile")
+    assert task._build_candidates() == ()
+    assert task.desktop.window.title == "Example"
+    task.close()
+
+
+def test_desktop_click_explicit_effect_is_preserved_without_caller_gate(tmp_path):
+    task = environment(tmp_path)
+    task.required_window_title_contains = ""
+    task.reset()
+    task.observe(())
+    effect = {"kind": "window_title_contains", "value": "Done"}
+    task._plan = ComputerPlan.from_dict({
+        "options": [{"ref": "d:c0", "operation": "click", "expected": effect}],
+    }, task._snapshot)
+    assert all(item.expected == effect for item in task._build_candidates())
+    assert task._build_candidates()
+    task.close()
+
+
+def test_public_scene_binding_never_exposes_os_window_evidence():
+    class CapturePolicy:
+        def choose(self, observation, candidates):
+            self.state = observation.state
+            return RulePolicy().choose(observation, candidates)
+
+    inner = CapturePolicy()
+    policy = PublicDecisionPolicy(inner)
+    policy.choose(Observation("goal", "subgoal", {
+        "window_handle": 888, "visual_region": [10, 20, 300, 400],
+        "controls": [{"ref": "c0", "name": "Finish", "rectangle": [10, 20, 30, 40]}],
+        "visual_targets": [{"ref": "v0", "label": "Finish", "box": [1, 2, 3, 4]}],
+        "scene_state": {
+            "fingerprint": "opaque-scene-digest", "window_handle": 888,
+            "observed_at": 123.4,
+            "window_evidence": {"process_id": 999, "dpi": 144, "region": [10, 20, 300, 400]},
+        },
+    }, source="open-desktop"), [ActionCandidate("one", Channel.CONTROL, "control.noop", "No-op")])
+    assert inner.state["scene_state"] == {"fingerprint": "opaque-scene-digest"}
+    assert inner.state["controls"][0]["ref"] == "c0"
+    assert inner.state["visual_targets"] == [{"ref": "v0", "label": "Finish"}]
+    assert not any(key in json.dumps(inner.state) for key in (
+        "process_id", "window_handle", "window_evidence", "observed_at", "region", "dpi", "rectangle", "box",
+    ))
+
+
+def test_browser_foreground_loss_allows_passive_desktop_observe_and_blocks_its_actions(tmp_path):
+    from cua_jev.safety import WindowLease
+
+    class FocusScreen:
+        foreground = False
+        focuses = 0
+
+        def ensure_foreground(self, handle):
+            if not self.foreground:
+                raise RuntimeError("selected window is not foreground")
+
+        def focus_handle(self, *args, **kwargs):
+            self.focuses += 1
+            pytest.fail("shared observation must not steal foreground")
+
+        def capture_window_lease(self, handle, **kwargs):
+            self.ensure_foreground(handle)
+            return WindowLease(handle, 1, (0, 0, 200, 200), 96)
+
+    task = environment(tmp_path)
+    task.desktop.screen = screen = FocusScreen()
+    task.reset()
+    observation = task.observe(())
+    assert observation.state["requirements"]["desktop_focus_available"] is False
+    task._plan = ComputerPlan.from_dict({"options": [
+        {"ref": "b:e0", "operation": "click"}, {"ref": "d:c0", "operation": "click"},
+    ]}, task._snapshot)
+    offered = task._build_candidates()
+    assert offered and all(not item.capability.startswith("desktop.") for item in offered)
+    assert screen.focuses == 0
+    screen.foreground = True
+    task.observe(())
+    assert task._desktop_focus_available
+    assert task.desktop._window_lease is not None
+    task.close()
+
+
+def test_passive_desktop_observation_keeps_lease_identity_binding(tmp_path, monkeypatch):
+    from cua_jev.safety import WindowLease
+
+    class PassiveScreen:
+        requests = []
+
+        def ensure_foreground(self, handle):
+            raise RuntimeError("selected window is not foreground")
+
+        def capture_window_lease(self, handle, *, require_foreground=True):
+            self.requests.append(require_foreground)
+            assert require_foreground is False
+            return WindowLease(handle, 17, (10, 20, 200, 200), 144)
+
+    task = environment(tmp_path)
+    task.desktop.screen = screen = PassiveScreen()
+    task.reset()
+    monkeypatch.setattr("cua_jev.open_desktop.sys.platform", "win32")
+    task.observe(())
+    assert screen.requests == [False]
+    lease = task.desktop._window_lease
+    assert lease.process_id == 17 and lease.dpi == 144
+    assert task.desktop.scene_state.window_evidence["foreground_checked"] is False
+    assert not task._desktop_focus_available
+    task.close()
+
+
+@pytest.mark.parametrize("kind", [{}, []])
+def test_computer_plan_malformed_effect_kind_is_controlled_rejection(tmp_path, kind):
+    task = environment(tmp_path)
+    task.reset()
+    task.observe(())
+    with pytest.raises(ValueError, match="postcondition"):
+        ComputerPlan.from_dict({"options": [{"ref": "d:c0", "operation": "click",
+            "expected": {"kind": kind, "value": "Done"}}]}, task._snapshot)
+    task.close()

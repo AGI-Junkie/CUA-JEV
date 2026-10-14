@@ -12,7 +12,7 @@ The existing research homepage did not support a task-oriented product. The work
 4. Pause/stop: accepted command and completed acknowledgement are separate states. Buttons show `pausing`, `stopping` and `starting` until the worker confirms. Commands with unchanged lifecycle status wait for `command_pending` to clear. Emergency stop can supersede pending UI operations. Preview replacement waits for the old worker to stop before creating another.
 5. Takeover/correction: pause is acknowledged before takeover. The user changes the note/context/layout and records a correction; the backend resets its task and invalidates scope. Reconfirmation is required before resuming. Changed form fields remain dirty across polling: start/resume/scope stay blocked until correction or a new preview, avoiding execution of an old backend task behind new form text.
 6. Recovery: a backend error pauses progress, retains receipts and shows reobserve/replan controls only where the backend supports them. Budget failure is captured as a real controlled-browser error, never task completion. Scope revocation pauses an active worker and calls backend `invalidate_scope`.
-7. Refresh: the UI fetches the authoritative active session, restores its task, scope state, screenshot and complete event cursor, and restores stop/control access. No secrets or task state are stored in browser localStorage.
+7. Refresh: the UI fetches the authoritative active session, restores its task, scope state, screenshot and complete event cursor, and restores stop/control access. An already confirmed `ready` session starts directly, including after a lost start request; it does not attempt a second scope confirmation. No secrets or task state are stored in browser localStorage.
 8. Completion: only the backend's verified completion ends the task. History separates Jev decisions, input receipts, independent postconditions and exact terminal results; detailed raw evidence is available on request.
 
 ## Observers and capability boundary
@@ -33,7 +33,7 @@ Reproduce browser integration evidence: `.venv/bin/python scripts/check_workbenc
 
 Evidence: `docs/evidence/workbench-workspace.png`, `workbench-completed-columns.png`, `workbench-completed-stacked.png`, `workbench-completed-vision.png`, `workbench-recovery.png`, `workbench-takeover.png`, `workbench-settings.png`, `workbench-history.png`, `workbench-mobile.png`; machine-readable results in `workbench-checks.json`. These are actual browser-rendered product screenshots. The centered scene is an actual backend Chromium capture, not an SVG or replay illustration.
 
-Latest evidence: 17 browser integration checks passed with no page errors. The optional vision flow measured nonzero vision API calls and a real `desktop.visual_click` receipt. Existing UI tests: 8 passed; script Ruff and JavaScript syntax checks pass. No real provider/Windows validation is implied.
+Latest focused evidence: 19 browser integration checks passed with no page errors or external requests, including an aborted start request after scope confirmation and recovery after reload. The optional vision flow measured nonzero vision API calls and a real `desktop.visual_click` receipt. Script Ruff and JavaScript syntax checks pass. No real provider/Windows validation is implied.
 
 ## CI runner isolation and repeatability
 

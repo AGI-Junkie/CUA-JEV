@@ -37,6 +37,7 @@ class SimulatedPlanner:
         by_name = {control.name: control.ref for control in snapshot.controls}
         result = DesktopPlan.from_dict({
             "subgoal": "Write and save the local note",
+            "mode": "sequential",
             "options": [
                 {"ref": by_name["Note text"], "operation": "fill", "value": NOTE},
                 {"ref": by_name["Save local note"], "operation": "click",
