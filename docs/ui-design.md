@@ -1,34 +1,36 @@
-# Workbench UI proposal — 2026-10-14
+# Workbench product proposal — real browser session integration
 
-Status: implemented interactive **simulation**, visual direction proposed for review. Not user-approved aesthetics. Entry: `/workbench` (also `/static/workbench.html`) served by `cua-jev-ui`. Run `.venv/bin/python -m cua_jev.ui.app --port 8768`, then open `http://127.0.0.1:8768/workbench`. The existing research showcase remains available.
+2026-10-14. Visual direction proposed for review; not a user-selected style. The earlier synthetic screenshot replay has been replaced by a real controlled Chromium session backend. No JavaScript-generated task success or model counters remain.
 
-## Internal design review before implementation
+## Internal design review and implemented flow
 
-The research homepage is useful evidence but does not provide a task-oriented product. The proposed workbench uses a warm neutral canvas, a centered screenshot, a persistent task/scope column and a visible plan/action column. Navy actions and amber scope warnings distinguish operation from evidence. Settings and history use the same navigation. All three action phases (proposed, input receipt, independent verification) remain separate; an input receipt never means task success.
+The existing research homepage did not support a task-oriented product. The workbench uses a warm neutral canvas, a centered actual browser screenshot, persistent task/scope controls, and a plan/action panel. Settings and factual history share navigation. The screenshot stays central; detailed trace JSON is behind expandable history evidence.
 
-Review decisions: scope confirmation is mandatory before simulation starts; setup is reachable before task creation; keys have password inputs, no persistence or network path; stop invalidates the pending timer; takeover requires a correction and reconfirmation; failures freeze the loop and provide reobserve/replan actions; two layout replays exercise the same semantic task. Narrow screens preserve source order and scroll, without hiding emergency stop. Keyboard focus and status announcements are required. No drag control is offered because reliable drag support is not established.
+1. Configuration: planner, Jev and vision roles expose model name/address and password input. Settings are stored through the local backend; secrets are process-memory only, not returned or written to disk. Password inputs clear immediately on submission, including failed requests. Blank preserves a key; explicit checkboxes clear it. All actual paid API execution remains disabled. Config changes apply only to newly created sessions.
+2. Task/context/note/layout: create a backend session, launch real headless Chromium and preview its actual PNG. Local scope confirmation is required before the backend confirm/start commands. The current engineering task is exact local note saving; the mocked planner is a controlled test service, not general task intelligence.
+3. Run: the backend supplies the persistent semantic PlanContract, fresh SceneState, actual JevPolicy API decision parsing, real mouse/keyboard receipts and independent expected-effect verification. The UI polls authoritative state and ordered facts. API request counts and model latency come from backend measurements; missing evidence stays unknown. API responses are simulated; browser execution is real.
+4. Pause/stop: accepted command and completed acknowledgement are separate states. Buttons show `pausing`, `stopping` and `starting` until the worker confirms. Commands with unchanged lifecycle status wait for `command_pending` to clear. Emergency stop can supersede pending UI operations. Preview replacement waits for the old worker to stop before creating another.
+5. Takeover/correction: pause is acknowledged before takeover. The user changes the note/context/layout and records a correction; the backend resets its task and invalidates scope. Reconfirmation is required before resuming. Changed form fields remain dirty across polling: start/resume/scope stay blocked until correction or a new preview, avoiding execution of an old backend task behind new form text.
+6. Recovery: a backend error pauses progress, retains receipts and shows reobserve/replan controls only where the backend supports them. Budget failure is captured as a real controlled-browser error, never task completion. Scope revocation pauses an active worker and calls backend `invalidate_scope`.
+7. Refresh: the UI fetches the authoritative active session, restores its task, scope state, screenshot and complete event cursor, and restores stop/control access. No secrets or task state are stored in browser localStorage.
+8. Completion: only the backend's verified completion ends the task. History separates Jev decisions, input receipts, independent postconditions and exact terminal results; detailed raw evidence is available on request.
 
-## Implemented interaction contract
+## Observers and capability boundary
 
-1. First configuration: model roles/address/name, budget and privacy; save only acknowledges this browser-session proposal. Keys are cleared. Live configuration is explicitly unavailable.
-2. Create task/context; choose a controlled local demo layout. Confirm the previewed window/scope.
-3. Start a replay: persistent semantic plan → fresh candidate from the current replay scene → **simulated Jev decision** → simulated input receipt → expected-effect verification. No paid API or operating-system input.
-4. Pause or emergency stop cancels pending callbacks. Takeover records the user's correction, invalidates confirmation and returns to scope review. Resume needs fresh confirmation.
-5. Inject focus loss, stale frame, timeout or no-effect to review recovery. Reobserve resumes from a new replay frame; replan resets the semantic subgoal sequence.
-6. Completion requires all independent expected-effect checks. History contains factual simulation events, local sequence/time and evidence status. Existing backend history is separately fetched read-only on request.
+Default observation uses real DOM semantics as the controlled browser adapter's UIA-shaped input. It is not VLM understanding. An optional `mock_vision` path is explicitly labelled screenshot plus simulated vision API; its controlled test service derives targets from the test fixture. No real vision model capability is claimed. Both paths use real screenshot PNGs. The UI displays the backend observer capability rather than assuming a live VLM.
 
-## Scope and limitations
+Two browser layouts are engineering acceptance scenarios, not arbitrary application or game coverage. Browser input runs in cloud headless Chromium; this does not demonstrate Windows foreground input isolation. Reliable drag support is absent. Real-money gambling, payments and external submission are outside scope. Local session screenshots/events persist in the backend evidence directory; they are not uploaded to a model by this workbench. Actual Windows, API-key authorization and real provider inference remain separate validation.
 
-The centered SVG is a synthetic screenshot replay, not a live capture or a real browser execution. Two layouts are engineering acceptance scenarios, not proof of arbitrary apps/games. Foreground input can affect the selected desktop; no background isolation is claimed. Real-money gambling, payments and external submission are outside scope. No settings, tasks, screenshots or keys are sent by the prototype. Keys are never stored, logged or echoed. Refresh clears all prototype state. External backend run IDs are rendered as text.
+## Independent review fixes
 
-## Backend integration requirements
+Independent review identified scope revocation, command acknowledgement, paused-field dirty state, replacing active previews, refresh control recovery and configuration snapshot messaging gaps. Fixes are implemented; the browser checks exercise real backend transitions, reload, delayed polling and correction. Existing research pages remain intact and link to `/workbench`.
 
-A production API must expose current `SceneState` including frame timestamp, window identity/focus, geometry/DPI and current fresh candidates; a persistent `PlanContract`; `JevDecision`; execution receipts; independent expected-effect verification; per-role call counts/latency; session generation cancellation; and scope-bound start/pause/resume/stop/reobserve/replan operations. Pause/stop acknowledgement must precede a UI claim that real dispatch stopped. Backend key storage needs an OS secret store or process-only input; this UI intentionally does not invent a key-save endpoint. Existing `/api/runs` supports task-specific runs and stop, not this generic contract. The live-history button is read-only and labels its existing source.
+## Run and evidence
 
-## Review evidence
+Start `.venv/bin/python -m cua_jev.ui.app --port 8768`, then open `http://127.0.0.1:8768/workbench`.
 
-See `docs/evidence/workbench-*.png` for actual browser-rendered prototype screenshots when generated. Browser checks cover configuration, required scope, both replay layouts, verified completion, pause/late callbacks, takeover/reconfirmation, stop and injected failure recovery. These are UI simulation checks; model and Windows validation are separate.
+Reproduce browser integration evidence: `.venv/bin/python scripts/check_workbench.py`. Requires Playwright plus system Chromium or a Playwright-installed Chromium. `CUA_JEV_UI_URL` overrides the localhost base URL. The script creates only local test notes, verifies exact saved text in both layouts, exercises settings/key clearing, a backend budget failure, scope revocation, takeover/correction, refresh restoration, stop and responsive rendering. It makes no paid API calls. Lower-level session tests separately exercise focus loss, stale frames, timeout, no effect and late results.
 
-Validated: 15 browser checks passed with no page errors; existing `tests/test_ui.py`: 8 passed. Independent review identified scope revocation and focus reconfirmation gaps; both fixed and covered by browser checks.
+Evidence: `docs/evidence/workbench-workspace.png`, `workbench-completed-columns.png`, `workbench-completed-stacked.png`, `workbench-completed-vision.png`, `workbench-recovery.png`, `workbench-takeover.png`, `workbench-settings.png`, `workbench-history.png`, `workbench-mobile.png`; machine-readable results in `workbench-checks.json`. These are actual browser-rendered product screenshots. The centered scene is an actual backend Chromium capture, not an SVG or replay illustration.
 
-Reproduce browser evidence: start the UI as above, then run `.venv/bin/python scripts/check_workbench.py` (Playwright plus system Chromium, or Playwright-installed Chromium). `CUA_JEV_UI_URL` overrides the localhost base URL. These checks intentionally wait for delayed callbacks to prove pause, stop and scope revocation prevent replay advancement.
+Latest evidence: 17 browser integration checks passed with no page errors. The optional vision flow measured nonzero vision API calls and a real `desktop.visual_click` receipt. Existing UI tests: 8 passed; script Ruff and JavaScript syntax checks pass. No real provider/Windows validation is implied.
