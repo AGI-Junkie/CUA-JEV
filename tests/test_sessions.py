@@ -369,3 +369,108 @@ def test_vision_budget_refusal_is_visible_and_dom_verifies_completed_effect(mana
     completion = next(e for e in events if e["type"] == "completion")
     assert completion["data"]["observer"] == "live DOM"
     assert completion["data"]["actual"] == "Saved locally: Distinct user note 中文"
+
+
+@pytest.mark.parametrize("fault", ["planner_json", "planner_ref", "jev_choice"])
+def test_invalid_model_reply_fails_closed_then_recovers(manager, monkeypatch, fault):
+    """Corrupt one real adapter response, retaining its counted fixture transport attempt."""
+    import httpx
+
+    original_transport = httpx.MockTransport
+    remaining = [True]
+
+    def transport(handler):
+        def corrupt(request):
+            response = handler(request)
+            role = "planner" if request.url.path.endswith("chat/completions") else "jev"
+            expected_role = "jev" if fault == "jev_choice" else "planner"
+            if remaining[0] and role == expected_role:
+                remaining[0] = False
+                data = response.json()
+                if fault == "planner_json":
+                    data["choices"][0]["message"]["content"] = "not valid JSON"
+                elif fault == "planner_ref":
+                    plan = json.loads(data["choices"][0]["message"]["content"])
+                    plan["options"][0]["ref"] = "unobserved-target"
+                    data["choices"][0]["message"]["content"] = json.dumps(plan)
+                else:
+                    data["answers"]["action"]["choice"] = "unoffered-action"
+                return httpx.Response(200, json=data)
+            return response
+
+        return original_transport(corrupt)
+
+    monkeypatch.setattr(httpx, "MockTransport", transport)
+    sid = create(manager)
+    start(manager, sid)
+    failed = wait(manager, sid, "paused")
+    assert failed["error"]
+    assert not remaining[0]
+    facts = manager.events(sid)["events"]
+    assert not any(e["type"] in {"receipt", "completion"} for e in facts)
+    attempts_at_error = failed["counters"]["model_attempts"]
+    assert attempts_at_error == (2 if fault == "jev_choice" else 1)
+    manager.command(sid, "replan")
+    wait(manager, sid, "paused")
+    manager.command(sid, "resume")
+    completed = wait(manager, sid, "completed")
+    assert completed["counters"]["model_attempts"] == attempts_at_error + 3
+    assert completed["counters"]["steps"] == 2
+    receipts = [e for e in manager.events(sid)["events"] if e["type"] == "receipt"]
+    assert len(receipts) == 2 and all(e["data"]["success"] for e in receipts)
+
+
+def test_stale_scene_guard_reobserves_without_replanning(manager, monkeypatch):
+    from dataclasses import replace
+
+    from cua_jev.runtime import AgentRuntime
+
+    original_step = AgentRuntime.step
+    corrupt_once = [True]
+
+    def stale_once(runtime, observation, candidates):
+        if corrupt_once[0]:
+            corrupt_once[0] = False
+            observation = replace(observation, created_at=time.time() - 60)
+        return original_step(runtime, observation, candidates)
+
+    monkeypatch.setattr(AgentRuntime, "step", stale_once)
+    sid = create(manager)
+    start(manager, sid)
+    paused = wait(manager, sid, "paused")
+    assert "expired" in paused["error"]
+    contract_id = paused["plan"]["contract_id"]
+    assert not any(e["type"] == "receipt" for e in manager.events(sid)["events"])
+    manager.command(sid, "reobserve")
+    wait(manager, sid, "paused")
+    manager.command(sid, "resume")
+    completed = wait(manager, sid, "completed")
+    assert completed["plan"]["contract_id"] == contract_id
+    assert completed["counters"]["planner"]["calls"] == 1
+    assert completed["counters"]["jev"]["calls"] == 3
+    assert completed["counters"]["steps"] == 2
+
+
+def test_no_fresh_candidates_requests_recovery_without_blind_input(manager, monkeypatch):
+    from cua_jev.desktop_contracts import FreshCandidateCompiler
+
+    original_bind = FreshCandidateCompiler.bind
+    unavailable = [True]
+
+    def unavailable_bind(compiler, contract, snapshot, used):
+        return {} if unavailable[0] else original_bind(compiler, contract, snapshot, used)
+
+    monkeypatch.setattr(FreshCandidateCompiler, "bind", unavailable_bind)
+    sid = create(manager)
+    start(manager, sid)
+    paused = wait(manager, sid, "paused")
+    assert "No freshly grounded candidates" in paused["error"]
+    assert paused["counters"]["jev"]["calls"] == 0
+    assert not any(e["type"] == "receipt" for e in manager.events(sid)["events"])
+    unavailable[0] = False
+    manager.command(sid, "replan")
+    wait(manager, sid, "paused")
+    manager.command(sid, "resume")
+    completed = wait(manager, sid, "completed")
+    assert completed["counters"]["jev"]["calls"] == 2
+    assert completed["counters"]["steps"] == 2

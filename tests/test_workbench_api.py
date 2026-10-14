@@ -131,3 +131,47 @@ def test_sse_drains_completion_that_arrives_between_batch_and_status(monkeypatch
                  if line.startswith("data: ") and '"seq"' in line]
         assert [e["seq"] for e in facts] == [1, 2, 3]
         assert response.text.index('"completion"') < response.text.index("event: end")
+
+
+@pytest.mark.skipif(not BROWSER, reason="requires installed local Chromium and Playwright")
+def test_budget_pause_stop_stream_reconnect_preserves_facts_and_counters(tmp_path):
+    with TestClient(create_app(root=ROOT, data=tmp_path)) as client:
+        headers = {"x-cua-jev-csrf": client.get("/api/workbench/bootstrap").json()["csrf"]}
+        assert client.put("/api/workbench/config", headers=headers,
+                          json={"limits": {"max_steps": 1}}).status_code == 200
+        response = client.post("/api/workbench/sessions", headers=headers,
+                               json={"task": "Save local budget note", "note_text": "Bounded note"})
+        assert response.status_code == 201
+        sid = response.json()["id"]
+        base = f"/api/workbench/sessions/{sid}"
+        wait(client, sid, {"scope_ready"})
+        assert client.post(base + "/confirm", headers=headers, json={}).status_code == 200
+        wait(client, sid, {"ready"})
+        assert client.post(base + "/start", headers=headers, json={}).status_code == 200
+        paused = wait(client, sid, {"paused"})
+        assert "Step budget" in paused["error"]
+        assert paused["counters"]["steps"] == 1
+        facts = client.get(base + "/events").json()["events"]
+        receipt = next(e for e in facts if e["type"] == "receipt")
+        cursor = receipt["seq"]
+        stream = client.get(base + "/stream?once=true", headers={"last-event-id": str(cursor)})
+        streamed = [json.loads(line[6:]) for line in stream.text.splitlines()
+                    if line.startswith("data: ") and '"seq"' in line]
+        assert [e["seq"] for e in streamed] == [e["seq"] for e in facts if e["seq"] > cursor]
+        assert client.post(base + "/resume", headers=headers, json={}).status_code == 200
+        resumed = wait(client, sid, {"paused"})
+        assert resumed["counters"]["steps"] == 1
+        assert resumed["counters"]["model_attempts"] >= paused["counters"]["model_attempts"]
+        assert client.post(base + "/stop", headers=headers, json={}).status_code == 200
+        stopped = wait(client, sid, {"stopped"})
+        assert stopped["counters"]["steps"] == 1
+        all_facts = client.get(base + "/events").json()["events"]
+        replay_cursor = streamed[-1]["seq"]
+        replay = client.get(base + "/stream", headers={"last-event-id": str(replay_cursor)})
+        replayed = [json.loads(line[6:]) for line in replay.text.splitlines()
+                    if line.startswith("data: ") and '"seq"' in line]
+        assert [e["seq"] for e in replayed] == [e["seq"] for e in all_facts if e["seq"] > replay_cursor]
+        assert replayed[-1]["data"]["status"] == "stopped"
+        assert "event: end" in replay.text
+        assert sum(e["type"] == "receipt" for e in all_facts) == 1
+        assert not any(e["type"] == "completion" for e in all_facts)
