@@ -15,6 +15,8 @@ class WindowImage:
     jpeg: bytes
     sample: bytes
     region: tuple[int, int, int, int]  # left, top, width, height on the desktop
+    # Native-resolution evidence stays local; resized JPEG/sample cannot bind a click.
+    pixels: bytes = b""  # row-major RGB, before thumbnailing or JPEG compression
 
     def __post_init__(self) -> None:
         if not self.jpeg.startswith(b"\xff\xd8") or len(self.jpeg) > 2_000_000:
@@ -23,6 +25,8 @@ class WindowImage:
             raise ValueError("window screenshot sample must be 64x64 grayscale")
         if self.region[2] <= 0 or self.region[3] <= 0:
             raise ValueError("window screenshot region must have positive size")
+        if self.pixels and len(self.pixels) != self.region[2] * self.region[3] * 3:
+            raise ValueError("window screenshot pixels must match native RGB dimensions")
 
 
 @dataclass(frozen=True)
@@ -116,6 +120,32 @@ def changed_fraction(before: bytes, after: bytes, *, threshold: int = 20) -> flo
     return sum(abs(x - y) >= threshold for x, y in zip(before, after, strict=True)) / len(before)
 
 
+def target_region_unchanged(
+    before: WindowImage, after: WindowImage, box: tuple[int, int, int, int]
+) -> bool:
+    """Fail closed on any native RGB change in the target and its two-pixel border.
+
+    Coarse samples miss small controls and equal-luminance replacements. Exact
+    local evidence deliberately rejects animation until a fresh grounding is
+    available; it does not infer target identity from a whole-window threshold.
+    """
+    if before.region != after.region or not before.pixels or not after.pixels:
+        return False
+    x0, y0, x1, y1 = box
+    if not (0 <= x0 < x1 <= 1000 and 0 <= y0 < y1 <= 1000):
+        return False
+    width, height = before.region[2:]
+    left, top = max(0, x0 * width // 1000 - 2), max(0, y0 * height // 1000 - 2)
+    right = min(width, (x1 * width + 999) // 1000 + 2)
+    bottom = min(height, (y1 * height + 999) // 1000 + 2)
+    old, new = memoryview(before.pixels), memoryview(after.pixels)
+    for row in range(top, bottom):
+        start, end = (row * width + left) * 3, (row * width + right) * 3
+        if old[start:end] != new[start:end]:
+            return False
+    return True
+
+
 def browser_viewport_image(page: Any) -> WindowImage:
     """Capture only the current browser viewport for model grounding and freshness checks."""
     import io
@@ -124,14 +154,15 @@ def browser_viewport_image(page: Any) -> WindowImage:
         from PIL import Image
     except ImportError:
         raise RuntimeError("install Pillow for browser vision capture") from None
-    raw = page.screenshot(type="jpeg", quality=70, scale="css", full_page=False)
+    raw = page.screenshot(type="png", scale="css", full_page=False)
     with Image.open(io.BytesIO(raw)) as source:
         image = source.convert("RGB")
     width, height = image.size
     if width < 40 or height < 40 or width * height > 16_000_000:
         raise ValueError("browser viewport is outside safe screenshot size bounds")
+    pixels = image.tobytes()
     sample = image.convert("L").resize((SAMPLE_EDGE, SAMPLE_EDGE)).tobytes()
     image.thumbnail((1280, 1280))
     buffer = io.BytesIO()
     image.save(buffer, format="JPEG", quality=72)
-    return WindowImage(buffer.getvalue(), sample, (0, 0, width, height))
+    return WindowImage(buffer.getvalue(), sample, (0, 0, width, height), pixels)

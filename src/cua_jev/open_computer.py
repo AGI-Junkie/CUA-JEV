@@ -17,7 +17,9 @@ from typing import Any, Protocol
 from urllib.parse import urldefrag
 
 from .artifact_surface import ArtifactState, ArtifactSurface
+from .desktop_contracts import verify_postcondition
 from .episode import Evaluation
+from .executors.common import execute_with_receipt
 from .executors.screen import ScreenController
 from .local_tools import ScopedReadOnlyTools, ToolOffer
 from .mcp_surface import McpCallOffer, McpToolSurface
@@ -472,15 +474,14 @@ class OpenComputerTask:
             self.required_url_contains.casefold() in snapshot.browser.url.casefold(),
             not self.required_window_title_contains or (
                 desktop is not None and
-            self.required_window_title_contains.casefold()
-            in desktop.window_title.casefold()),
+                verify_postcondition({
+                    "kind": "window_title_contains", "value": self.required_window_title_contains,
+                }, desktop)),
             not self.required_window_text_contains or (
                 desktop is not None and
-            self.required_window_text_contains.casefold() in (
-                desktop.text + "\n" + "\n".join(
-                    item.name for item in desktop.controls
-                ) + "\n" + "\n".join(desktop.edit_values)
-            ).casefold()),
+                verify_postcondition({
+                    "kind": "text_contains", "value": self.required_window_text_contains,
+                }, desktop)),
             all(item in self._completed_capabilities for item in self.required_capabilities),
             all(item in self._visits for item in self.required_visits),
             len(self._discovered_sources) >= self.min_verified_sources,
@@ -547,7 +548,7 @@ class OpenComputerTask:
                     "tool, a self-link, or an action outside the configured origin. Choose a "
                     "different live ref that advances pending_visits or other unmet requirements. "
                     "Desktop non-fill actions require an explicit independently readable expected "
-                    "postcondition or a configured caller window gate."
+                    "postcondition or a configured caller window gate that is not already satisfied."
                 ),
             )
             result = self._build_candidates()
@@ -576,13 +577,22 @@ class OpenComputerTask:
                 continue
             expected = option.expected
             if option.source == "d" and option.operation != "fill":
-                if not expected and self.required_window_title_contains:
-                    expected = {"kind": "window_title_contains", "value": self.required_window_title_contains}
-                if not expected and self.required_window_text_contains:
-                    expected = {"kind": "text_contains", "value": self.required_window_text_contains}
+                desktop = self._snapshot.desktop
+                if desktop is None:
+                    continue
                 if not expected:
+                    caller_gates = (
+                        {"kind": "window_title_contains", "value": self.required_window_title_contains},
+                        {"kind": "text_contains", "value": self.required_window_text_contains},
+                    )
+                    expected = next((
+                        gate for gate in caller_gates
+                        if gate["value"] and not verify_postcondition(gate, desktop)
+                    ), {})
+                if not expected or verify_postcondition(expected, desktop):
                     # Without an independent effect declaration, this would apply
-                    # a side effect whose verifier must fail and invite repetition.
+                    # a side effect whose false-to-true verifier must fail and invite
+                    # repetition. An effect already observed cannot justify input.
                     continue
             provider = self.providers[option.source]
             candidates = provider.compile(
@@ -618,7 +628,24 @@ class OpenComputerTask:
         matches = [provider for provider in self.providers.values() if provider.owns(candidate)]
         if len(matches) != 1:
             raise ValueError("selected capability has no unique surface provider")
-        return matches[0].execute(candidate, observation_id, decision_id)
+        provider = matches[0]
+        if provider.namespace == "d" and (
+            candidate.capability != "desktop.fill"
+            and candidate.arguments.get("operation") != "fill"
+        ):
+            # A model decision may be delayed, and replacement desktop backends
+            # do not pass through the Windows executor's own input boundary.
+            try:
+                if not candidate.expected:
+                    raise RuntimeError("desktop action has no independently readable expected effect")
+                if verify_postcondition(candidate.expected, provider.capture()):
+                    raise RuntimeError("desktop expected effect is already satisfied before input")
+            except Exception as exc:
+                def reject(error: Exception = exc) -> dict[str, Any]:
+                    raise error
+
+                return execute_with_receipt(candidate, observation_id, decision_id, reject)
+        return provider.execute(candidate, observation_id, decision_id)
 
     def evaluate(
         self,

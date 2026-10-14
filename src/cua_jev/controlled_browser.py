@@ -107,6 +107,14 @@ class BrowserScreen:
     def capture_region(self, region: tuple[int, int, int, int]) -> WindowImage:
         from PIL import Image
         left, top, width, height = region
-        jpeg = self.page.screenshot(type="jpeg", clip={"x": left, "y": top, "width": width, "height": height})
-        sample = Image.open(io.BytesIO(jpeg)).convert("L").resize((64, 64)).tobytes()
-        return WindowImage(jpeg, sample, region)
+        raw = self.page.screenshot(
+            type="png", scale="css", clip={"x": left, "y": top, "width": width, "height": height}
+        )
+        with Image.open(io.BytesIO(raw)) as source:
+            image = source.convert("RGB")
+        pixels = image.tobytes()
+        sample = image.convert("L").resize((64, 64)).tobytes()
+        image.thumbnail((1280, 1280))
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=72)
+        return WindowImage(buffer.getvalue(), sample, region, pixels)

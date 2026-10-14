@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import queue
 import shutil
@@ -20,6 +21,7 @@ from typing import Any
 import httpx
 
 from ..controlled_browser import BrowserScreen, BrowserWindow
+from ..errors import GuardRejected, ObservationExpired
 from ..executors.control import ControlExecutor
 from ..guard import ActionGuard
 from ..model_planner import ChatModelPlanner
@@ -33,6 +35,45 @@ from ..trace import JsonlTrace
 from ..verify import VerifierRegistry
 
 TERMINAL = {"stopped", "completed", "failed"}
+
+
+def _validate_utf8_text(value, field):
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        raise ValueError(f"{field} must contain valid UTF-8 text") from None
+
+
+def _read_event_log(path):
+    if not path.exists():
+        return []
+    # Split the bytes only on the JSONL delimiter: Unicode line separators may
+    # legitimately occur inside JSON strings. Decode records independently so a
+    # crash in the last UTF-8 character cannot hide the durable preceding facts.
+    records = path.read_bytes().split(b"\n")
+    events = []
+    for index, record in enumerate(records):
+        if index == len(records) - 1 and not record:
+            break
+        try:
+            event = json.loads(record.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            if index == len(records) - 1:
+                break  # Only an unterminated crash tail is recoverable.
+            raise ValueError(f"Event log corruption at record {index + 1}") from None
+        if (
+            not isinstance(event, dict)
+            or type(event.get("seq")) is not int
+            or event["seq"] != len(events) + 1
+            or not isinstance(event.get("type"), str)
+            or not event["type"]
+            or type(event.get("at")) not in {int, float}
+            or (type(event["at"]) is float and not math.isfinite(event["at"]))
+            or not isinstance(event.get("data"), dict)
+        ):
+            raise ValueError(f"Event log corruption at record {index + 1}")
+        events.append(event)
+    return events
 
 
 def _validate_note(value):
@@ -113,11 +154,15 @@ class ControlledSessionManager:
         _validate_note(payload["note_text"])
         if len(payload["task"]) > 2000:
             raise ValueError("task must be <=2000 characters")
+        _validate_utf8_text(payload["task"], "task")
         if not isinstance(payload.get("context", ""), str) or len(payload.get("context", "")) > 4000:
             raise ValueError("context must be text <=4000 characters")
-        if payload.get("layout", "columns") not in {"columns", "stacked"}:
+        _validate_utf8_text(payload.get("context", ""), "context")
+        layout = payload.get("layout", "columns")
+        if not isinstance(layout, str) or layout not in {"columns", "stacked"}:
             raise ValueError("unsupported controlled layout")
-        if payload.get("observe_mode", "dom") not in {"dom", "mock_vision"}:
+        observe_mode = payload.get("observe_mode", "dom")
+        if not isinstance(observe_mode, str) or observe_mode not in {"dom", "mock_vision"}:
             raise ValueError("Unsupported observation mode")
         with self._lock:
             if any(s.state["status"] not in TERMINAL for s in self._sessions.values()):
@@ -150,7 +195,7 @@ class ControlledSessionManager:
         if session_id not in self._sessions:
             self.get(session_id)
             path = self.directory / session_id / "events.jsonl"
-            events = [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+            events = _read_event_log(path)
         else:
             with self._sessions[session_id].lock:
                 events = copy.deepcopy(self._sessions[session_id].events)
@@ -168,8 +213,9 @@ class ControlledSessionManager:
 
     def close(self):
         for session in list(self._sessions.values()):
-            if session.public()["status"] not in TERMINAL:
-                session.command("stop", {})
+            with session.lock:
+                if session.public()["status"] not in TERMINAL:
+                    session.command("stop", {})
         for session in self._sessions.values():
             session.thread.join(timeout=8)
 
@@ -295,10 +341,12 @@ class _Session:
                     raise ValueError("Correction supports note_text, context and layout only")
                 note = payload.get("note_text", self.state["note_text"])
                 _validate_note(note)
-                if payload.get("layout", self.state["layout"]) not in {"columns", "stacked"}:
+                layout = payload.get("layout", self.state["layout"])
+                if not isinstance(layout, str) or layout not in {"columns", "stacked"}:
                     raise ValueError("unsupported layout")
                 if not isinstance(payload.get("context", ""), str) or len(payload.get("context", "")) > 4000:
                     raise ValueError("context must be text <=4000 characters")
+                _validate_utf8_text(payload.get("context", ""), "context")
             if action == "correct":
                 self.update(scope_confirmed=False)
             # Invalidate an outstanding model result now, before worker acknowledgement.
@@ -347,6 +395,7 @@ class _Session:
         history = []
         task = None
         failure = None
+        observation_refreshes = 0
         try:
             from playwright.sync_api import sync_playwright
 
@@ -558,6 +607,7 @@ class _Session:
                         },
                         "jev": dict(policy.metrics),
                         "runtime": dict(runtime.metrics),
+                        "observation_refreshes": observation_refreshes,
                         "vision": {
                             "attempts": vision.vision_attempts if vision else 0,
                             "failures": task.vision_failures,
@@ -640,21 +690,45 @@ class _Session:
                     try:
                         generation = self.control.token()
                         ledger.check()
-                        observation = task.observe(history)
-                        self.update(scene=observation.state)
-                        self.frame(page)
                         attempt_indices["planner"] = 0
-                        candidates = task.candidates(observation, history)
-                        if task.plan_contract:
-                            self.update(plan=task.plan_contract.to_dict())
-                            self.event("plan", task.plan_contract.to_dict())
-                        # Planner may have completed after pause, stop, or resume generation.
-                        with self.control.dispatch(generation):
-                            ledger.check()
-                        if not candidates:
-                            raise RuntimeError("No freshly grounded candidates; reobserve or replan")
                         attempt_indices["jev"] = 0
-                        step = runtime.step(observation, candidates)
+                        while True:
+                            with self.control.dispatch(generation):
+                                ledger.check()
+                            observation = task.observe(history)
+                            self.update(scene=observation.state)
+                            self.frame(page)
+                            candidates = task.candidates(observation, history)
+                            if task.plan_contract:
+                                self.update(plan=task.plan_contract.to_dict())
+                                self.event("plan", task.plan_contract.to_dict())
+                            # Preserve this generation through planning and retries.
+                            with self.control.dispatch(generation):
+                                ledger.check()
+                            if not candidates:
+                                raise RuntimeError("No freshly grounded candidates; reobserve or replan")
+                            try:
+                                runtime.guard.check_fresh(observation, candidates)
+                                step = runtime.step(
+                                    observation, candidates, expected_generation=generation,
+                                    before_dispatch=ledger.check,
+                                )
+                            except ObservationExpired as exc:
+                                with self.control.dispatch(generation):
+                                    ledger.check()
+                                if observation_refreshes >= limits.max_retries:
+                                    raise GuardRejected(
+                                        "GUI observation refresh budget exhausted; no action executed"
+                                    ) from exc
+                                observation_refreshes += 1
+                                self.event("observation_refresh", {
+                                    "observation_id": observation.observation_id,
+                                    "reason": str(exc), "refreshes": observation_refreshes,
+                                    "maximum": limits.max_retries,
+                                })
+                                self.update(counters=capture_counters())
+                                continue
+                            break
                         history.append(step)
                         self.update(counters=capture_counters())
                         self.frame(page)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import queue
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from .errors import GuardRejected, PolicyError
@@ -100,8 +100,15 @@ class AgentRuntime:
                 self._policy_lock.release()
             self.metrics["policy_latency_ms"] += (time.perf_counter() - started) * 1000
 
-    def step(self, observation: Observation, candidates: Sequence[ActionCandidate]) -> StepResult:
-        generation = self.control.token()
+    def step(
+        self, observation: Observation, candidates: Sequence[ActionCandidate], *,
+        expected_generation: int | None = None,
+        before_dispatch: Callable[[], None] | None = None,
+    ) -> StepResult:
+        generation = self.control.token() if expected_generation is None else expected_generation
+        with self.control.dispatch(generation):
+            if before_dispatch is not None:
+                before_dispatch()
         self.trace.append("observation", observation.to_dict())
         self.trace.append("candidates", {"items": [candidate.to_dict() for candidate in candidates]})
         decision = self._choose(observation, candidates)
@@ -141,6 +148,8 @@ class AgentRuntime:
             },
         )
         with self.control.dispatch(generation):
+            if before_dispatch is not None:
+                before_dispatch()
             receipt = self.executors.execute(candidate, observation.observation_id, decision.decision_id)
         self.trace.append("receipt", receipt.to_dict())
         verification = self.verifiers.verify(candidate, receipt)

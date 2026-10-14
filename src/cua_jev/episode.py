@@ -9,7 +9,7 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Protocol
 
-from .errors import CuaJevError
+from .errors import CuaJevError, GuardRejected, ObservationExpired, PolicyError
 from .models import ActionCandidate, ActionReceipt, Observation, Verification, state_fingerprint
 from .runtime import AgentRuntime, StepResult
 
@@ -60,6 +60,15 @@ class EpisodeConfig:
     timeout_s: float = 300
     unchanged_limit: int = 3
     repeated_action_limit: int = 3
+    max_observation_refreshes: int = 2
+
+    def __post_init__(self) -> None:
+        if type(self.max_observation_refreshes) is not int or self.max_observation_refreshes < 0:
+            raise ValueError("observation refresh budget must be a nonnegative integer")
+
+
+class _EpisodeTimeout(CuaJevError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -113,26 +122,60 @@ class EpisodeRunner:
         runtime = self.runtime_factory(environment) if parameters else self.runtime_factory()
         status = EpisodeStatus.ENVIRONMENT_ERROR
         reason = "episode did not start"
+        refreshes = 0
+
+        def check_timeout():
+            if time.time() - started > self.config.timeout_s:
+                raise _EpisodeTimeout("episode timeout")
+
         try:
             if reset:
                 environment.reset()
             for _ in range(self.config.max_steps):
-                if time.time() - started > self.config.timeout_s:
-                    status, reason = EpisodeStatus.TIMEOUT, "episode timeout"
-                    break
-                observation = environment.observe(history)
-                observation = self._with_recent_actions(observation, history)
-                fingerprint = state_fingerprint(observation)
+                check_timeout()
                 if self._is_stuck(fingerprints, actions):
                     status, reason = EpisodeStatus.STUCK, "state/action repetition limit reached"
                     break
-                candidates = tuple(environment.candidates(observation, history))
-                if not candidates:
-                    status, reason = EpisodeStatus.TASK_FAILURE, "environment offered no legal actions"
+                # Keep the original generation across planning and every refresh;
+                # a pause/resume cannot authorize any work already in flight.
+                generation = runtime.control.token()
+                result = None
+                while True:
+                    with runtime.control.dispatch(generation):
+                        check_timeout()
+                    observation = environment.observe(history)
+                    observation = self._with_recent_actions(observation, history)
+                    candidates = tuple(environment.candidates(observation, history))
+                    with runtime.control.dispatch(generation):
+                        check_timeout()
+                    if not candidates:
+                        status, reason = EpisodeStatus.TASK_FAILURE, "environment offered no legal actions"
+                        break
+                    try:
+                        runtime.guard.check_fresh(observation, candidates)
+                        result = runtime.step(
+                            observation, candidates, expected_generation=generation,
+                            before_dispatch=check_timeout,
+                        )
+                    except ObservationExpired as exc:
+                        with runtime.control.dispatch(generation):
+                            check_timeout()
+                        if refreshes >= self.config.max_observation_refreshes:
+                            raise GuardRejected(
+                                "GUI observation refresh budget exhausted; no action executed"
+                            ) from exc
+                        refreshes += 1
+                        runtime.trace.append("observation_refresh", {
+                            "observation_id": observation.observation_id,
+                            "reason": str(exc), "refreshes": refreshes,
+                            "maximum": self.config.max_observation_refreshes,
+                        })
+                        continue
                     break
-                result = runtime.step(observation, candidates)
+                if result is None:
+                    break
                 history.append(result)
-                fingerprints.append(fingerprint)
+                fingerprints.append(state_fingerprint(observation))
                 actions.append(result.decision.candidate_id)
                 candidate = next(item for item in candidates if item.id == result.decision.candidate_id)
                 evaluation = environment.evaluate(observation, candidate, result.receipt, result.verification)
@@ -155,10 +198,12 @@ class EpisodeRunner:
                 status, reason = EpisodeStatus.MAX_STEPS, "maximum step budget exhausted"
         except CuaJevError as exc:
             name = type(exc).__name__
-            status = {
-                "PolicyError": EpisodeStatus.POLICY_ERROR,
-                "GuardRejected": EpisodeStatus.GUARD_REJECTED,
-            }.get(name, EpisodeStatus.EXECUTION_ERROR)
+            status = (
+                EpisodeStatus.TIMEOUT if isinstance(exc, _EpisodeTimeout)
+                else EpisodeStatus.POLICY_ERROR if isinstance(exc, PolicyError)
+                else EpisodeStatus.GUARD_REJECTED if isinstance(exc, GuardRejected)
+                else EpisodeStatus.EXECUTION_ERROR
+            )
             reason = f"{name}: {exc}"
         except Exception as exc:
             status, reason = EpisodeStatus.ENVIRONMENT_ERROR, f"{type(exc).__name__}: {exc}"

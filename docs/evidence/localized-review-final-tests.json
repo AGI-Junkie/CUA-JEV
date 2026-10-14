@@ -1,0 +1,49 @@
+{
+  "source": "local cloud checkout; not GitHub-hosted CI",
+  "validated_at_utc": "2026-10-14T22:55:42.158014+00:00",
+  "base_head": "9f3c759da43d114e1236e03ba397b34e3f121239",
+  "implementation_and_tests_sha256": "48043f363fa12b2d02e00399d0b3347d9a4776506a3958b55a6ae339b33a0847",
+  "total_cases": 394,
+  "passed": 391,
+  "failures": 0,
+  "errors": 0,
+  "skipped": [
+    {
+      "classname": "tests.test_open_browser",
+      "name": "test_real_browser_snapshot_and_dom_execution_without_external_site",
+      "reason": "Edge browser unavailable: Error"
+    },
+    {
+      "classname": "tests.test_suites",
+      "name": "test_edge_task_completes_real_dom_and_download_cycle",
+      "reason": "the system Edge channel is a Windows demo dependency"
+    },
+    {
+      "classname": "tests.test_suites",
+      "name": "test_excel_task_completes_real_workbook_cycle",
+      "reason": "set CUA_JEV_RUN_EXCEL_INTEGRATION=1 on a Windows host with desktop Excel"
+    }
+  ],
+  "duration_seconds": 99.98,
+  "strict_browser_result_gate": "passed",
+  "ui_checks": 19,
+  "browser_dataflow_summary": "docs/evidence/localized-review-browser-summary.json",
+  "baseline_evidence": "docs/evidence/localized-review-baseline.json",
+  "thread_audit": "docs/evidence/localized-review-thread-audit.json",
+  "models": "explicit local HTTP mocks; actual controlled Chromium GUI input",
+  "paid_api_calls": 0,
+  "external_ui_requests": 0,
+  "independent_review": {
+    "desktop_composite_safety_cases_passed": 87,
+    "refresh_session_cases_passed": 17,
+    "browser_cases_passed": 23,
+    "browser_allowed_edge_skip": 1,
+    "session_recovery_cases_passed": 38,
+    "case_groups_overlap": true,
+    "remaining_concrete_findings": 0
+  },
+  "windows_desktop_live_verified": false,
+  "real_model_quality_verified": false,
+  "github_ci_verified": false,
+  "merged": false
+}

@@ -430,24 +430,27 @@ def test_stale_scene_guard_reobserves_without_replanning(manager, monkeypatch):
     original_step = AgentRuntime.step
     corrupt_once = [True]
 
-    def stale_once(runtime, observation, candidates):
+    def stale_once(runtime, observation, candidates, **kwargs):
         if corrupt_once[0]:
             corrupt_once[0] = False
             observation = replace(observation, created_at=time.time() - 60)
-        return original_step(runtime, observation, candidates)
+        return original_step(runtime, observation, candidates, **kwargs)
 
     monkeypatch.setattr(AgentRuntime, "step", stale_once)
     sid = create(manager)
     start(manager, sid)
-    paused = wait(manager, sid, "paused")
-    assert "expired" in paused["error"]
-    contract_id = paused["plan"]["contract_id"]
-    assert not any(e["type"] == "receipt" for e in manager.events(sid)["events"])
-    manager.command(sid, "reobserve")
-    wait(manager, sid, "paused")
-    manager.command(sid, "resume")
     completed = wait(manager, sid, "completed")
-    assert completed["plan"]["contract_id"] == contract_id
+    events = manager.events(sid)["events"]
+    refresh = next(event for event in events if event["type"] == "observation_refresh")
+    assert "expired" in refresh["data"]["reason"]
+    assert all(
+        event["data"]["observation_id"] != refresh["data"]["observation_id"]
+        for event in events if event["type"] == "receipt"
+    )
+    assert {event["data"]["contract_id"] for event in events if event["type"] == "plan"} == {
+        completed["plan"]["contract_id"]
+    }
+    assert completed["counters"]["observation_refreshes"] == 1
     assert completed["counters"]["planner"]["calls"] == 1
     assert completed["counters"]["jev"]["calls"] == 3
     assert completed["counters"]["steps"] == 2

@@ -24,7 +24,7 @@ from cua_jev.policy import JevPolicy, RulePolicy
 from cua_jev.registry import ExecutorRegistry
 from cua_jev.runtime import AgentRuntime
 from cua_jev.verify import VerifierRegistry
-from cua_jev.vision import VisualScene, VisualTarget
+from cua_jev.vision import VisualScene, VisualTarget, browser_viewport_image, changed_fraction
 
 
 class FakeLocator:
@@ -166,6 +166,7 @@ class FakeVisualPage(FakePage):
         self.color = "#f5f7fa"
         self.mouse = self
         self.clicks = []
+        self.pointer = (0, 0)
 
     def screenshot(self, **_kwargs):
         from PIL import Image, ImageDraw
@@ -174,8 +175,17 @@ class FakeVisualPage(FakePage):
         draw = ImageDraw.Draw(image)
         draw.rectangle((250, 150, 370, 210), fill="#145ea8")
         buffer = io.BytesIO()
-        image.save(buffer, format="JPEG")
+        image.save(buffer, format="PNG")
         return buffer.getvalue()
+
+    def move(self, x, y):
+        self.pointer = (x, y)
+
+    def down(self):
+        pass
+
+    def up(self):
+        self.click(*self.pointer)
 
     def click(self, x, y):
         self.clicks.append((x, y))
@@ -380,6 +390,77 @@ def test_browser_vision_requires_opt_in_and_rejects_stale_viewport():
     assert "stale" in (receipt.error or "")
     assert not page.clicks
     environment.close()
+
+
+@pytest.mark.skipif(not shutil.which("chromium"), reason="requires installed local Chromium")
+@pytest.mark.parametrize("trigger", ["before_dispatch", "pointer_move", "pointer_move_dom"])
+def test_real_chromium_canvas_click_rejects_local_target_replacement(trigger):
+    playwright_api = pytest.importorskip("playwright.sync_api")
+
+    class CanvasVision:
+        def perceive_scene(self, *_args):
+            return VisualScene("A canvas Apply control.", (), (
+                VisualTarget("v0", "Apply", (750, 750, 780, 800)),
+            ))
+
+    with playwright_api.sync_playwright() as playwright:
+        browser = playwright.chromium.launch(executable_path=shutil.which("chromium"), headless=True)
+        try:
+            page = browser.new_page(viewport={"width": 400, "height": 240})
+            page.route("https://example.test/**", lambda route: route.fulfill(
+                status=200, content_type="text/html", body="""
+                <title>Example</title><style>body{margin:0}</style>
+                <canvas width="400" height="240"></canvas><script>
+                const canvas = document.querySelector('canvas'), ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#f5f7fa'; ctx.fillRect(0, 0, 400, 240);
+                ctx.fillStyle = '#ff0000'; ctx.fillRect(300, 180, 12, 12);
+                window.replaced = false; window.unintended = 0;
+                window.replaceTarget = () => {
+                  window.replaced = true;
+                  ctx.fillStyle = '#008200'; ctx.fillRect(300, 180, 12, 12);
+                };
+                canvas.addEventListener('click', event => {
+                  if (event.offsetX >= 300 && event.offsetX < 312 &&
+                      event.offsetY >= 180 && event.offsetY < 192 && window.replaced) {
+                    window.unintended += 1;
+                  }
+                });
+                </script>""",
+            ))
+            environment = task(
+                page=page, planner=FakePlanner([{"ref": "v0", "operation": "click"}]),
+                vision_grounder=CanvasVision(), allow_screenshot_upload=True,
+                allow_visual_clicks=True, allow_external_actions=True,
+            )
+            environment.reset()
+            observation = environment.observe(())
+            candidate = environment.candidates(observation, ())[0]
+            dom_before = environment._capture()
+            observed = environment._visual_image
+            if trigger == "before_dispatch":
+                page.evaluate("window.replaceTarget()")
+                current = browser_viewport_image(page)
+                assert changed_fraction(observed.sample, current.sample) < 0.08
+                assert observed.pixels != current.pixels
+                assert environment._capture().fingerprint() == dom_before.fingerprint()
+            elif trigger == "pointer_move":
+                page.evaluate("canvas.addEventListener('mousemove', window.replaceTarget, {once:true})")
+            else:
+                page.evaluate("""canvas.addEventListener('mousemove', () => {
+                  window.replaced = true; document.title = 'Changed control context';
+                }, {once:true})""")
+            receipt = environment(candidate, observation.observation_id, "d1")
+            assert page.evaluate("window.unintended") == 0
+            assert not receipt.success
+            if trigger == "pointer_move_dom":
+                assert "DOM changed" in receipt.error
+                assert browser_viewport_image(page).pixels == observed.pixels
+            else:
+                assert "stale" in receipt.error
+                assert environment._capture().fingerprint() == dom_before.fingerprint()
+            environment.close()
+        finally:
+            browser.close()
 
 
 def test_browser_vision_failure_falls_back_to_live_dom_when_available():

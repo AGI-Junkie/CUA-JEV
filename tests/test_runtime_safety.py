@@ -188,3 +188,65 @@ def test_guarded_click_rechecks_focus_after_pointer_movement():
     with pytest.raises(GuardRejected, match="foreground"):
         FakeScreen().guarded_click_point(lease, 50, 50)
     assert not clicks
+
+
+@pytest.mark.parametrize("point,region", [
+    ((199.5, 100), (0, 0, 200, 200)),
+    ((100, 199.5), (0, 0, 200, 200)),
+    ((-0.5, -100), (-200, -200, 200, 200)),
+])
+def test_guarded_click_validates_the_actual_rounded_pixel(point, region):
+    from cua_jev.executors.screen import ScreenController
+
+    lease = WindowLease(1, 11, region, 96)
+    calls = []
+
+    class Pointer:
+        def moveTo(self, x, y, **kwargs):
+            calls.append(("move", x, y))
+
+        def click(self):
+            calls.append("click")
+
+    class FakeScreen(ScreenController):
+        def validate_window_lease(self, lease, **kwargs):
+            calls.append("validate")
+
+        @staticmethod
+        def _modules():
+            calls.append("input modules")
+            return Pointer(), None
+
+    with pytest.raises(GuardRejected, match="outside"):
+        FakeScreen(pause_s=0).guarded_click_point(lease, *point)
+    assert calls == []  # Reject before even moving the pointer beyond the selected window.
+
+
+def test_guarded_click_runs_visual_validation_after_move_before_click():
+    from cua_jev.executors.screen import ScreenController
+
+    lease = WindowLease(1, 11, (0, 0, 200, 200), 96)
+    calls = []
+
+    class Pointer:
+        def moveTo(self, x, y, **kwargs):
+            calls.append(("move", x, y))
+
+        def click(self):
+            calls.append("click")
+
+    class FakeScreen(ScreenController):
+        def validate_window_lease(self, lease, **kwargs):
+            pass
+
+        @staticmethod
+        def _modules():
+            return Pointer(), None
+
+    def reject_stale_target():
+        assert calls == [("move", 50, 50)]
+        raise RuntimeError("target changed during pointer movement")
+
+    with pytest.raises(RuntimeError, match="target changed"):
+        FakeScreen().guarded_click_point(lease, 50, 50, before_click=reject_stale_target)
+    assert calls == [("move", 50, 50)]

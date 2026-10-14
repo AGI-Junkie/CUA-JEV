@@ -4,6 +4,7 @@ import ctypes
 import io
 import re
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -82,11 +83,12 @@ class ScreenController:
             raise ValueError("window screenshot region is outside safe size bounds")
         pyautogui, _ = self._modules()
         image = pyautogui.screenshot(region=(left, top, width, height)).convert("RGB")
+        pixels = image.tobytes()
         sample = image.convert("L").resize((64, 64)).tobytes()
         image.thumbnail((1280, 1280))
         buffer = io.BytesIO()
         image.save(buffer, format="JPEG", quality=72)
-        return WindowImage(buffer.getvalue(), sample, region)
+        return WindowImage(buffer.getvalue(), sample, region, pixels)
 
     @staticmethod
     def ensure_foreground(handle: int) -> None:
@@ -129,13 +131,19 @@ class ScreenController:
     def validate_window_lease(self, lease: WindowLease, *, max_age_s: float = 30) -> None:
         lease.validate(self.capture_window_lease(lease.handle), max_age_s=max_age_s)
 
-    def guarded_click_point(self, lease: WindowLease, x: float, y: float) -> None:
+    def guarded_click_point(
+        self, lease: WindowLease, x: float, y: float, *, before_click: Callable[[], None] | None = None
+    ) -> None:
+        x, y = round(x), round(y)
         lease.validate_point(x, y)
         self.validate_window_lease(lease)
         pyautogui, _ = self._modules()
-        pyautogui.moveTo(round(x), round(y), duration=self.move_s)
+        pyautogui.moveTo(x, y, duration=self.move_s)
         # The foreground/geometry can change while moving the pointer.
         self.validate_window_lease(lease)
+        if before_click is not None:
+            before_click()
+            self.validate_window_lease(lease)
         pyautogui.click()
         time.sleep(self.pause_s)
 

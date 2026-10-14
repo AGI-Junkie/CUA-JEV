@@ -25,7 +25,7 @@ from .executors.screen import ScreenController
 from .models import ActionCandidate, ActionReceipt, Channel, Observation, Risk, Verification
 from .runtime import StepResult
 from .verify import VerifierRegistry
-from .vision import VisualScene, VisualTarget, WindowImage, changed_fraction
+from .vision import VisualScene, VisualTarget, WindowImage, changed_fraction, target_region_unchanged
 
 MAX_CONTROLS = 80
 MAX_OPTIONS = 16
@@ -648,6 +648,8 @@ class OpenDesktopTask:
                 continue
             option = replace(option, ref=target.ref)
             expected = option.expected or self.plan_contract.success
+            if option.operation != "fill" and verify_postcondition(expected, self._snapshot):
+                continue
             visual = target if isinstance(target, VisualTarget) else None
             if visual is not None:
                 if not (self.allow_button_actions and self.allow_visual_clicks):
@@ -728,6 +730,10 @@ class OpenDesktopTask:
             self._before[decision_id] = before
             if not self._completed_prerequisites_hold(before):
                 raise RuntimeError("completed plan prerequisite changed before input")
+            if candidate.arguments.get("operation") != "fill" and verify_postcondition(
+                candidate.expected, before
+            ):
+                raise RuntimeError("desktop expected effect already satisfied before input")
             ref = candidate.arguments["ref"]
             if candidate.capability == "desktop.visual_click":
                 if self._snapshot is None or self._visual_image is None:
@@ -757,16 +763,28 @@ class OpenDesktopTask:
                 if actual_region != region:
                     raise RuntimeError("visual window moved or resized")
                 self.screen.ensure_foreground(before.window_handle)
-                current = self.screen.capture_region(region)
-                if changed_fraction(observed.sample, current.sample) > 0.08:
-                    raise RuntimeError("visual screenshot became stale")
-                self._before_images[decision_id] = current
+
+                def validate_target() -> None:
+                    fresh = self._capture()
+                    if not self._completed_prerequisites_hold(fresh):
+                        raise RuntimeError("completed plan prerequisite changed before visual input")
+                    if verify_postcondition(candidate.expected, fresh):
+                        raise RuntimeError("desktop expected effect already satisfied before visual input")
+                    if fresh.uia_fingerprint() != self._snapshot.uia_fingerprint():
+                        raise RuntimeError("visual window changed before input")
+                    current = self.screen.capture_region(region)
+                    if not target_region_unchanged(observed, current, target.box):
+                        raise RuntimeError("visual target region became stale or lacks native pixel evidence")
+                    self._before[decision_id] = fresh
+                    self._before_images[decision_id] = replace(current, pixels=b"")
+
+                validate_target()
                 left, top, width, height = region
                 x0, y0, x1, y1 = target.box
                 x = left + (x0 + x1) * width / 2000
                 y = top + (y0 + y1) * height / 2000
                 if self._window_lease is not None:
-                    self.screen.guarded_click_point(self._window_lease, x, y)
+                    self.screen.guarded_click_point(self._window_lease, x, y, before_click=validate_target)
                 else:
                     self.screen.click_point(x, y)
                 return {"visual_target": ref, "label": target.label}

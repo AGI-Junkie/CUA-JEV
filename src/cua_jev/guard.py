@@ -4,7 +4,7 @@ import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from .errors import GuardRejected
+from .errors import GuardRejected, ObservationExpired
 from .models import ActionCandidate, Channel, Decision, Observation, Risk
 
 
@@ -45,10 +45,7 @@ class ActionGuard:
         if len(matches) != 1:
             raise GuardRejected("decision does not identify one offered candidate")
         candidate = matches[0]
-        if candidate.channel == Channel.GUI or candidate.capability.startswith("desktop."):
-            age = time.time() - observation.created_at
-            if not 0 <= age <= self.max_observation_age_s:
-                raise GuardRejected("GUI observation expired; observe again")
+        self.check_fresh(observation, (candidate,))
         if candidate.requires_confirmation and candidate.id not in self.confirmed_candidates:
             raise GuardRejected("candidate requires explicit confirmation")
         if candidate.risk == Risk.LOCAL_WRITE and not self.allow_writes:
@@ -63,6 +60,28 @@ class ActionGuard:
         self._validate_paths(candidate)
         self._consumed_observations.add(observation.observation_id)
         return candidate
+
+    def check_fresh(
+        self, observation: Observation, candidates: Sequence[ActionCandidate]
+    ) -> None:
+        """Check GUI evidence without consuming it or approving any action.
+
+        Hosts can refresh after slow planning before spending a policy call.
+        Approval repeats this check after the policy returns.
+        """
+        if any(item.channel == Channel.GUI or item.capability.startswith("desktop.")
+               for item in candidates):
+            captured_times = [observation.created_at]
+            scene = observation.state.get("scene_state")
+            if isinstance(scene, dict) and "observed_at" in scene:
+                captured_times.append(scene["observed_at"])
+            now = time.time()
+            for captured_at in captured_times:
+                if type(captured_at) not in (int, float):
+                    raise GuardRejected("GUI observation capture timestamp is invalid")
+                age = now - captured_at
+                if not 0 <= age <= self.max_observation_age_s:
+                    raise ObservationExpired("GUI observation expired; observe again")
 
     def _validate_paths(self, candidate: ActionCandidate) -> None:
         def visit(value, name="arguments"):

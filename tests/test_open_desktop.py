@@ -198,6 +198,7 @@ class FakeVisualScreen:
         self.sample = bytes(64 * 64)
         self.clicks = []
         self.foreground = True
+        self.pixels = bytes(200 * 200 * 3)
 
     def ensure_foreground(self, handle):
         assert handle == self.window.handle
@@ -205,7 +206,7 @@ class FakeVisualScreen:
             raise RuntimeError("selected window is not foreground")
 
     def capture_region(self, region):
-        return WindowImage(b"\xff\xd8\xff\xd9", self.sample, region)
+        return WindowImage(b"\xff\xd8\xff\xd9", self.sample, region, self.pixels)
 
     def click_point(self, x, y):
         self.clicks.append((x, y))
@@ -306,11 +307,149 @@ def test_visual_click_rejects_changed_screenshot_and_requires_explicit_opt_ins()
     assert observation.state["visual_targets"][0]["ref"] == "v0"
     candidate = environment.candidates(observation, ())[0]
     screen.sample = bytes([255]) * (64 * 64)
+    screen.pixels = bytes([255]) * (200 * 200 * 3)
     receipt = environment(candidate, observation.observation_id, "d1")
     assert not receipt.success
     assert "stale" in (receipt.error or "")
     assert not screen.clicks
     environment.close()
+
+
+def test_visual_click_rejects_local_replacement_below_global_stale_threshold():
+    from cua_jev.vision import changed_fraction
+
+    window = VisualFakeWindow()
+    screen = FakeVisualScreen(window)
+    task = OpenDesktopTask(
+        goal="Finish the window", window_title_re="Example", window=window,
+        screen=screen, planner=FakeDesktopPlanner([{"ref": "v0", "operation": "click"}]),
+        allow_button_actions=True, allow_visual_clicks=True,
+        vision_grounder=FakeVisionGrounder(), allow_screenshot_upload=True,
+    )
+    task.reset()
+    observation = task.observe(())
+    candidate = task.candidates(observation, ())[0]
+    # Canvas replaces only the old click center; UIA and window geometry stay identical.
+    previous = screen.sample
+    sample = bytearray(previous)
+    sample[32 * 64 + 32] = 255
+    screen.sample = bytes(sample)
+    pixels = bytearray(screen.pixels)
+    pixels[(100 * 200 + 100) * 3] = 255
+    screen.pixels = bytes(pixels)
+    assert changed_fraction(previous, screen.sample) < 0.08
+    assert task.capture_state().uia_fingerprint() == task._snapshot.uia_fingerprint()
+    receipt = task(candidate, observation.observation_id, "local-replacement")
+    assert not receipt.success
+    assert not screen.clicks
+    task.close()
+
+
+@pytest.mark.parametrize("replacement", [(1, 0, 0), (0, 255, 0)])
+def test_visual_click_rejects_native_pixel_change_even_with_identical_coarse_sample(replacement):
+    window = VisualFakeWindow()
+    screen = FakeVisualScreen(window)
+    task = OpenDesktopTask(
+        goal="Finish the window", window_title_re="Example", window=window,
+        screen=screen, planner=FakeDesktopPlanner([{"ref": "v0", "operation": "click"}]),
+        allow_button_actions=True, allow_visual_clicks=True,
+        vision_grounder=FakeVisionGrounder(), allow_screenshot_upload=True,
+    )
+    task.reset()
+    observation = task.observe(())
+    candidate = task.candidates(observation, ())[0]
+    pixels = bytearray(screen.pixels)
+    pixels[(100 * 200 + 100) * 3:(100 * 200 + 100) * 3 + 3] = bytes(replacement)
+    screen.pixels = bytes(pixels)
+    # Even a one-level RGB change which disappears in coarse grayscale must fail closed.
+    assert screen.capture_region((20, 30, 200, 200)).sample == task._visual_image.sample
+    receipt = task(candidate, observation.observation_id, "native-replacement")
+    assert not receipt.success
+    assert "target region" in receipt.error
+    assert not screen.clicks
+    task.close()
+
+
+def test_visual_click_allows_changes_outside_target_and_rejects_missing_native_evidence():
+    window = VisualFakeWindow()
+    screen = FakeVisualScreen(window)
+    task = OpenDesktopTask(
+        goal="Finish the window", window_title_re="Example", window=window,
+        screen=screen, planner=FakeDesktopPlanner([{"ref": "v0", "operation": "click"}]),
+        allow_button_actions=True, allow_visual_clicks=True,
+        vision_grounder=FakeVisionGrounder(), allow_screenshot_upload=True,
+    )
+    task.reset()
+    observation = task.observe(())
+    candidate = task.candidates(observation, ())[0]
+    pixels = bytearray(screen.pixels)
+    pixels[0] = 255
+    screen.pixels = bytes(pixels)
+    assert task(candidate, observation.observation_id, "unrelated-change").success
+    assert screen.clicks == [(120, 130)]
+    window.title = "Example"
+    screen.clicks.clear()
+    screen.pixels = b""
+    observation = task.observe(())
+    candidate = task.candidates(observation, ())[0]
+    receipt = task(candidate, observation.observation_id, "missing-evidence")
+    assert not receipt.success
+    assert "native pixel evidence" in receipt.error
+    assert not screen.clicks
+    task.close()
+
+
+@pytest.mark.parametrize("changed", ["pixels", "expected", "uia"])
+def test_visual_click_rechecks_target_after_pointer_move(changed):
+    class MovingPointerScreen(FakeVisualScreen):
+        def capture_window_lease(self, handle):
+            return SimpleNamespace(captured_at=0, handle=handle)
+
+        def validate_window_lease(self, lease):
+            assert lease.handle == self.window.handle
+
+        def guarded_click_point(self, lease, x, y, *, before_click=None):
+            if changed == "pixels":
+                pixels = bytearray(self.pixels)
+                pixels[(100 * 200 + 100) * 3] = 255
+                self.pixels = bytes(pixels)
+            else:
+                self.window.title = "Done" if changed == "expected" else "Changed dialog"
+            before_click()
+            self.click_point(x, y)
+
+    window = VisualFakeWindow()
+    screen = MovingPointerScreen(window)
+    task = OpenDesktopTask(
+        goal="Finish the window", window_title_re="Example", window=window,
+        screen=screen, planner=FakeDesktopPlanner([{"ref": "v0", "operation": "click"}]),
+        allow_button_actions=True, allow_visual_clicks=True,
+        vision_grounder=FakeVisionGrounder(), allow_screenshot_upload=True,
+    )
+    task.reset()
+    observation = task.observe(())
+    candidate = task.candidates(observation, ())[0]
+    receipt = task(candidate, observation.observation_id, "moved-pointer")
+    assert not receipt.success
+    assert any(word in receipt.error for word in ("target region", "already satisfied", "window changed"))
+    assert not screen.clicks
+    task.close()
+
+
+def test_desktop_rejects_expected_effect_that_becomes_true_before_input():
+    window = FakeWindow()
+    task = OpenDesktopTask(
+        goal="Finish the window", window_title_re="Example", window=window,
+        planner=FakeDesktopPlanner(), allow_button_actions=True,
+    )
+    task.reset()
+    observation = task.observe(())
+    candidate = task.candidates(observation, ())[0]
+    window.title = "Done"
+    receipt = task(candidate, observation.observation_id, "already-satisfied")
+    assert not receipt.success
+    assert "already satisfied" in receipt.error
+    task.close()
 
 
 def test_visual_observation_does_not_upload_when_selected_window_loses_focus():

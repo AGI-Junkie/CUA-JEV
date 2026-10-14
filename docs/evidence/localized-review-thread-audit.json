@@ -1,0 +1,142 @@
+{
+  "base_head": "9f3c759da43d114e1236e03ba397b34e3f121239",
+  "inline_threads_checked": 16,
+  "standalone_reviews_checked": 1,
+  "findings": [
+    {
+      "thread_id": "PRRT_kwDOVIW_pc6shBB8",
+      "comment_id": 4276162359,
+      "path": "src/cua_jev/open_desktop.py",
+      "finding": "Replan after an option changes the desktop state",
+      "resolution": "code independently reviewed and covered by final full regression; GitHub thread resolution metadata unchanged",
+      "category": "prior fix retained and revalidated"
+    },
+    {
+      "thread_id": "PRRT_kwDOVIW_pc6shBCA",
+      "comment_id": 4276162365,
+      "path": "src/cua_jev/open_desktop.py",
+      "finding": "Verify visual clicks without reusing the vision model",
+      "resolution": "code independently reviewed and covered by final full regression; GitHub thread resolution metadata unchanged",
+      "category": "prior fix retained and revalidated"
+    },
+    {
+      "thread_id": "PRRT_kwDOVIW_pc6shBCG",
+      "comment_id": 4276162375,
+      "path": "src/cua_jev/ui/sessions.py",
+      "finding": "Register an executor for the terminal control candidate",
+      "resolution": "code independently reviewed and covered by final full regression; GitHub thread resolution metadata unchanged",
+      "category": "prior fix retained and revalidated"
+    },
+    {
+      "thread_id": "PRRT_kwDOVIW_pc6shLCu",
+      "comment_id": 4276227775,
+      "path": "src/cua_jev/open_computer.py",
+      "finding": "Reject desktop clicks without a postcondition",
+      "resolution": "code independently reviewed and covered by final full regression; GitHub thread resolution metadata unchanged",
+      "category": "prior fix retained and revalidated"
+    },
+    {
+      "thread_id": "PRRT_kwDOVIW_pc6shLC1",
+      "comment_id": 4276227783,
+      "path": "src/cua_jev/ui/static/workbench.js",
+      "finding": "Start directly from an already confirmed ready state",
+      "resolution": "code independently reviewed and covered by final full regression; GitHub thread resolution metadata unchanged",
+      "category": "prior fix retained and revalidated"
+    },
+    {
+      "thread_id": "PRRT_kwDOVIW_pc6shLC7",
+      "comment_id": 4276227792,
+      "path": "src/cua_jev/open_desktop.py",
+      "finding": "Revalidate completed progress before resuming a contract",
+      "resolution": "code independently reviewed and covered by final full regression; GitHub thread resolution metadata unchanged",
+      "category": "prior fix retained and revalidated"
+    },
+    {
+      "thread_id": "PRRT_kwDOVIW_pc6shLDC",
+      "comment_id": 4276227801,
+      "path": "src/cua_jev/ui/sessions.py",
+      "finding": "Persist the terminal lifecycle event before terminal state",
+      "resolution": "code independently reviewed and covered by final full regression; GitHub thread resolution metadata unchanged",
+      "category": "prior fix retained and revalidated"
+    },
+    {
+      "thread_id": "PRRT_kwDOVIW_pc6shLDK",
+      "comment_id": 4276227811,
+      "path": "src/cua_jev/open_desktop.py",
+      "finding": "Normalize expected conditions before checkpointing",
+      "resolution": "code independently reviewed and covered by final full regression; GitHub thread resolution metadata unchanged",
+      "category": "prior fix retained and revalidated"
+    },
+    {
+      "thread_id": "PRRT_kwDOVIW_pc6shLDQ",
+      "comment_id": 4276227823,
+      "path": "src/cua_jev/open_desktop.py",
+      "finding": "Remove physical window evidence from public Jev state",
+      "resolution": "code independently reviewed and covered by final full regression; GitHub thread resolution metadata unchanged",
+      "category": "prior fix retained and revalidated"
+    },
+    {
+      "thread_id": "PRRT_kwDOVIW_pc6shVCP",
+      "comment_id": 4276293291,
+      "path": "src/cua_jev/open_desktop.py",
+      "finding": "Restore desktop focus before the next cross-app observation",
+      "resolution": "code independently reviewed and covered by final full regression; GitHub thread resolution metadata unchanged",
+      "category": "prior fix retained and revalidated"
+    },
+    {
+      "thread_id": "PRRT_kwDOVIW_pc6shVCV",
+      "comment_id": 4276293300,
+      "path": "src/cua_jev/ui/sessions.py",
+      "finding": "Reject note values the HTML input cannot preserve",
+      "resolution": "code independently reviewed and covered by final full regression; GitHub thread resolution metadata unchanged",
+      "category": "prior fix retained and revalidated"
+    },
+    {
+      "thread_id": "PRRT_kwDOVIW_pc6shVCa",
+      "comment_id": 4276293306,
+      "path": "src/cua_jev/ui/sessions.py",
+      "finding": "Include Playwright in the workbench UI installation",
+      "resolution": "code independently reviewed and covered by final full regression; GitHub thread resolution metadata unchanged",
+      "category": "prior fix retained and revalidated"
+    },
+    {
+      "thread_id": "PRRT_kwDOVIW_pc6siZQL",
+      "comment_id": 4276746812,
+      "path": "src/cua_jev/open_computer.py",
+      "finding": "Reject clicks backed by an already-satisfied gate",
+      "resolution": "code independently reviewed and covered by final full regression; GitHub thread resolution metadata unchanged",
+      "category": "corrected in current continuation"
+    },
+    {
+      "thread_id": "PRRT_kwDOVIW_pc6siZQQ",
+      "comment_id": 4276746817,
+      "path": "src/cua_jev/guard.py",
+      "finding": "Reobserve instead of terminating after slow planning",
+      "resolution": "code independently reviewed and covered by final full regression; GitHub thread resolution metadata unchanged",
+      "category": "corrected in current continuation"
+    },
+    {
+      "thread_id": "PRRT_kwDOVIW_pc6siZQX",
+      "comment_id": 4276746827,
+      "path": "src/cua_jev/ui/sessions.py",
+      "finding": "Tolerate a torn final event during recovery",
+      "resolution": "code independently reviewed and covered by final full regression; GitHub thread resolution metadata unchanged",
+      "category": "corrected in current continuation"
+    },
+    {
+      "thread_id": "PRRT_kwDOVIW_pc6siZQe",
+      "comment_id": 4276746838,
+      "path": "src/cua_jev/ui/sessions.py",
+      "finding": "Reject unencodable task and context strings",
+      "resolution": "code independently reviewed and covered by final full regression; GitHub thread resolution metadata unchanged",
+      "category": "corrected in current continuation"
+    },
+    {
+      "review_url": "https://github.com/AGI-Junkie/CUA-JEV/pull/1#pullrequestreview-5525304221",
+      "finding": "Reground visual targets after localized changes",
+      "resolution": "native RGB target region gate before input and after pointer movement; changed/missing evidence fails closed"
+    }
+  ],
+  "independent_review": "Separate read-only reviewers assessed desktop, browser, composite, runtime and session changes. Reproduced defects were fixed and reviewed again. No remaining concrete finding in the reviewed paths.",
+  "github_ci_verified": false
+}

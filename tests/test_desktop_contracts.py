@@ -99,9 +99,7 @@ def test_click_unrelated_change_and_preexisting_expected_do_not_verify():
     item = task(window)
     item.observe(())
     item._call_planner(())
-    candidate = item._build_candidates()[0]
-    receipt = item(candidate, "obs", "preexisting")
-    assert not item._verify_effect(candidate, receipt).passed
+    assert item._build_candidates() == ()  # Preexisting effects cannot authorize another click.
 
 
 def test_ambiguous_semantics_request_replan_and_never_bind_arbitrarily():
