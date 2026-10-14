@@ -82,7 +82,9 @@ def run_layout(browser, layout: str, output: Path) -> dict:
         executors.register(channel, executor)
     verifiers = VerifierRegistry()
     task.register_verifiers(verifiers)
-    trace = JsonlTrace(output / f"{layout}.jsonl")
+    trace_path = output / f"{layout}.jsonl"
+    trace_path.write_text("", encoding="utf-8")
+    trace = JsonlTrace(trace_path)
     runtime = AgentRuntime(policy=policy, guard=ActionGuard(allow_writes=True, allow_destructive=True),
                            executors=executors, verifiers=verifiers, trace=trace)
     history = []
