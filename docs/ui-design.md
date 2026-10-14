@@ -34,3 +34,11 @@ Reproduce browser integration evidence: `.venv/bin/python scripts/check_workbenc
 Evidence: `docs/evidence/workbench-workspace.png`, `workbench-completed-columns.png`, `workbench-completed-stacked.png`, `workbench-completed-vision.png`, `workbench-recovery.png`, `workbench-takeover.png`, `workbench-settings.png`, `workbench-history.png`, `workbench-mobile.png`; machine-readable results in `workbench-checks.json`. These are actual browser-rendered product screenshots. The centered scene is an actual backend Chromium capture, not an SVG or replay illustration.
 
 Latest evidence: 17 browser integration checks passed with no page errors. The optional vision flow measured nonzero vision API calls and a real `desktop.visual_click` receipt. Existing UI tests: 8 passed; script Ruff and JavaScript syntax checks pass. No real provider/Windows validation is implied.
+
+## CI runner isolation and repeatability
+
+Run the browser checker against a dedicated server process/data directory, for example `cua-jev-ui --port 8768 --data /tmp/cua-jev-ci-runs`. It refuses an existing active session, configured process keys, a remote origin or enabled live-model execution. This protects unrelated work rather than silently stopping sessions or clearing credentials.
+
+CI can set `CUA_JEV_UI_EVIDENCE_DIR=artifacts/ui-checks` to keep generated screenshots and JSON outside tracked design evidence. `CUA_JEV_CHROMIUM` optionally selects the checker browser executable; otherwise it uses system Chromium or Playwright's installed browser. The backend separately uses `chromium` on PATH or Playwright's browser: install Chromium with dependencies (including headless shell), or put the installed full Chromium executable on PATH as `chromium`.
+
+The runner waits for actual PNG pixels, backend configuration changes and completed command acknowledgements. It blocks external UI requests and fails if any are attempted. Failure screenshots/JSON capture completed checks and session IDs. Cleanup stops only sessions created by the checker, restores initial nonsecret configuration and removes its dummy process keys. The server remains suitable for a second consecutive run. Server readiness is handled by the CI workflow before invoking the script.

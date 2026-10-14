@@ -1,0 +1,23 @@
+{
+  "execution": "real controlled Chromium, local simulated model APIs only",
+  "consecutive_runs_on_same_server": [
+    {
+      "checks_passed": 18,
+      "browser_errors": 0,
+      "external_requests": 0
+    },
+    {
+      "checks_passed": 18,
+      "browser_errors": 0,
+      "external_requests": 0
+    }
+  ],
+  "failure_cleanup_probe": {
+    "intentional_failure_captured": true,
+    "failure_screenshot_exists": true,
+    "created_sessions_stopped": true,
+    "dummy_keys_cleared": true,
+    "original_nonsecret_limits_restored": true,
+    "unrelated_active_sessions": false
+  }
+}
