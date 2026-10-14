@@ -154,3 +154,27 @@ def test_retry_argument_bounded_integer(retry):
     with pytest.raises(BudgetExceeded):
         ledger.record_model_attempt("jev", retry=retry)
     assert ledger.public()["model_attempts"] == 0
+
+
+def test_jev_loopback_http_rejected_atomically_without_secret_reflection(tmp_path):
+    store = ConfigurationStore(tmp_path / "config.json")
+    store.update({"roles": {"jev": {"name": "previous", "api_key": "previous-key"}}})
+    previous_file = store.path.read_text()
+    previous_snapshot = store.snapshot()
+    endpoint = "http://localhost:8111/private-secret-path"
+    with pytest.raises(ConfigurationError, match="Jev endpoint requires HTTPS") as error:
+        store.update({"roles": {
+            "planner": {"name": "uncommitted"},
+            "jev": {"endpoint": endpoint, "api_key": "submitted-secret"},
+        }})
+    assert endpoint not in str(error.value)
+    assert "submitted-secret" not in str(error.value)
+    assert store.snapshot() is previous_snapshot
+    assert store.path.read_text() == previous_file
+    assert store.snapshot().roles["jev"].api_key == "previous-key"
+
+
+def test_vision_loopback_http_remains_valid_in_controlled_mock(tmp_path):
+    store = ConfigurationStore(tmp_path / "config.json")
+    store.update({"roles": {"vision": {"endpoint": "http://127.0.0.1:8111/v1"}}})
+    assert store.snapshot().roles["vision"].endpoint == "http://127.0.0.1:8111/v1"

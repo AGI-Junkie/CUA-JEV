@@ -182,8 +182,11 @@ class ConfigurationStore:
                     or not isinstance(key, str) or len(key) > 8192 or not isinstance(clear, bool)
                     or any(ord(c) < 32 for c in key) or (clear and key)):
                 raise ConfigurationError("Invalid model role values")
+            endpoint = _endpoint(config.get("endpoint", old.endpoint))
+            if role == "jev" and endpoint and urlsplit(endpoint).scheme != "https":
+                raise ConfigurationError("Jev endpoint requires HTTPS")
             roles[role] = ModelRoleConfig(
-                name, _endpoint(config.get("endpoint", old.endpoint)),
+                name, endpoint,
                 "" if clear else key or old.api_key,
                 _amount(config.get("estimated_dollars_per_attempt", old.estimated_dollars_per_attempt)),
             )
