@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
+import tempfile
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
@@ -354,9 +356,18 @@ class OpenDesktopTask:
             "scene": self.scene_state.to_dict() if self.scene_state else None,
         }
         self.contract_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.contract_path.with_suffix(self.contract_path.suffix + ".tmp")
-        temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-        temporary.replace(self.contract_path)
+        descriptor, name = tempfile.mkstemp(
+            prefix=f".{self.contract_path.name}.", dir=self.contract_path.parent
+        )
+        temporary = Path(name)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+                json.dump(payload, output, ensure_ascii=False)
+                output.flush()
+                os.fsync(output.fileno())
+            temporary.replace(self.contract_path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def restore_contract(self) -> None:
         """Restore semantic progress only; observe/candidates must bind a fresh frame."""

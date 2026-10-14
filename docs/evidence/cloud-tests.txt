@@ -1,6 +1,6 @@
 ........................................................................ [ 41%]
-..........................s............................................. [ 83%]
-..........ss................                                             [100%]
+...........................s............................................ [ 83%]
+...........ss................                                            [100%]
 =============================== warnings summary ===============================
 .venv/lib/python3.12/site-packages/fastapi/testclient.py:1
   /workspace/CUA-JEV/.venv/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
@@ -11,4 +11,4 @@
 SKIPPED [1] tests/test_open_browser.py:660: Edge browser unavailable: Error
 SKIPPED [1] tests/test_suites.py:27: the system Edge channel is a Windows demo dependency
 SKIPPED [1] tests/test_suites.py:41: set CUA_JEV_RUN_EXCEL_INTEGRATION=1 on a Windows host with desktop Excel
-169 passed, 3 skipped, 1 warning in 11.11s
+170 passed, 3 skipped, 1 warning in 12.76s

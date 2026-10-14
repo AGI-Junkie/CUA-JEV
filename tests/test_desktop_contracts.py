@@ -1,6 +1,8 @@
 """Deterministic desktop fixtures, not real Windows or model verification."""
 
 import json
+import os
+import stat
 
 import pytest
 from test_open_desktop import FakeDesktopPlanner, FakeWindow
@@ -206,3 +208,15 @@ def test_fill_verifier_rebinds_semantic_field_after_ref_reorder():
     window.controls[1].value = "wrong"
     window.controls[0].value = "Ada"
     assert not item._verify_effect(candidate, receipt).passed
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX mode bits; Windows needs directory ACL validation")
+def test_checkpoint_replacement_does_not_inherit_public_file_mode(tmp_path):
+    path = tmp_path / "contract.json"
+    path.write_text("old public file")
+    path.chmod(0o644)
+    item = task(FakeWindow(), contract_path=path)
+    item.candidates(item.observe(()), ())
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert json.loads(path.read_text())["contract"]["contract_id"] == item.plan_contract.contract_id
+    assert list(tmp_path.iterdir()) == [path]

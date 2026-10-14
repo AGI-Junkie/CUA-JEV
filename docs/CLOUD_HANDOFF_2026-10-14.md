@@ -12,7 +12,7 @@ The Library skill's supported materialization and consumer-side helper were used
 
 | Requirement | Delivered evidence | Status / limit |
 |---|---|---|
-| Persistent PlanContract | `desktop_contracts.py`, private atomic JSON checkpoint, schema validation, progress, resume with fresh observation | Implemented for one desktop subgoal containing reusable actions; hierarchical multi-subgoal task orchestration remains open |
+| Persistent PlanContract | `desktop_contracts.py`, atomic local JSON checkpoint (POSIX owner-only permissions), schema validation, progress, resume with fresh observation | Implemented for one desktop subgoal containing reusable actions; hierarchical multi-subgoal task orchestration remains open |
 | Current SceneState | fingerprint, timestamp, selected HWND and OS evidence when available | Linux browser adapter explicitly marks physical window evidence unavailable |
 | Fresh compiler | semantic name/type/automation identity; rebind after geometry/ref changes; ambiguity gives no binding | Reused by OpenDesktopTask and existing compile_option path; no saved coordinates in contract |
 | Jev normal choice | existing JevPolicy, strict runtime mode, trusted privacy wrapper, JevDecision scene/candidate/request binding | Rule transport fallback disabled; explicit legacy rule benchmarks remain labeled baseline |
@@ -44,11 +44,11 @@ For a fresh Linux environment install `.[dev,ui,browser]` and a supported Chromi
 
 UI evidence: `docs/evidence/workbench-{workspace,completed,recovery,settings,history,mobile}.png` and `workbench-checks.json`. The visual direction and full flow are documented in `docs/ui-design.md`. This UI runs no operating-system inputs or model calls. It must be connected to scope-bound backend start/pause/resume/stop and explicit acknowledgements before presenting live control.
 
-Real browser evidence: `artifacts/controlled-acceptance/evidence.json`, before/after PNGs, each layout's JSONL and private-plan-shaped fixture JSON. Each layout: 1 simulated planning call, 2 simulated Jev HTTP choices, 2 verified actual browser actions, 0 external page requests, 0 paid API calls. Exact measured times are in evidence JSON; no speedup is claimed. `jev_decision` events bind scene, offered-set hash, contract and API request to receipt decision IDs.
+Real browser evidence: `artifacts/controlled-acceptance/evidence.json`, before/after PNGs, each layout's JSONL and local plan fixture JSON. Each layout: 1 simulated planning call, 2 simulated Jev HTTP choices, 2 verified actual browser actions, 0 external page requests, 0 paid API calls. Exact measured times are in evidence JSON; no speedup is claimed. `jev_decision` events bind scene, offered-set hash, contract and API request to receipt decision IDs.
 
 ## Verification and review
 
-Final development test run: **169 passed, 3 skipped**, Ruff and `git diff --check` clean. One existing Starlette/httpx deprecation warning remains. Skips and exact terminal evidence are retained in `docs/evidence/cloud-tests.txt`.
+Final development test run: **170 passed, 3 skipped**, Ruff and `git diff --check` clean. One existing Starlette/httpx deprecation warning remains. Skips and exact terminal evidence are retained in `docs/evidence/cloud-tests.txt`.
 
 UI: **15 actual Chromium interaction checks**, no browser page errors; covers both simulated layouts, scope required/revocation, pause/stop late callbacks, takeover, focus/stale/timeout/no-effect recovery, key clearing, read-only history and narrow viewport overflow. These checks establish prototype behavior only.
 
@@ -65,6 +65,6 @@ These are remaining verification tasks, not claims of tested capability:
 5. While a model request is pending, pause, stop, then resume separately; prove old result cannot dispatch. During input, test foreground takeover and report input already emitted separately from later blocked inputs.
 6. Move/resize the selected window, change DPI/display, replace the HWND/process, obscure/move the target, alter a small visual target and expire the frame. Each mismatch must reject/reobserve without blind clicking. Current screenshot comparison is conservative and not a proof of arbitrary visual target stability.
 7. Test no-effect/unrelated-change click, pre-existing success text, duplicate names, missing targets, readonly/disabled targets, wrong-field equal text, bounded keyboard/scroll and unsupported drag. Verify reobserve/replan/human correction paths and completion evidence.
-8. Integrate and test the live generic workbench API, secure settings, enforced budgets and acknowledgement semantics before calling this a functional end-to-end desktop product. Windows absence does not block that remaining cloud implementation work.
+8. Validate Windows directory ACL protection for checkpoint/trace files; POSIX owner-only checkpoint permissions are covered by a cloud regression test. Integrate and test the live generic workbench API, secure settings, enforced budgets and acknowledgement semantics before calling this a functional end-to-end desktop product. Windows absence does not block that remaining cloud implementation work.
 
 Review state: suitable for code/design review and continued development on this branch; **not release-ready as a complete general desktop product**. Payment, external submissions and real-money gambling remain outside the acceptance scope.
