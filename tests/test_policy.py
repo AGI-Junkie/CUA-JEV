@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 
@@ -148,3 +150,37 @@ def test_jev_timeout_records_attempts_latency_and_no_fallback():
     assert policy.last_exchange["latency_ms"] > 0
     assert "fallback" not in policy.last_exchange
     assert "private transport detail" not in str(policy.last_exchange)
+
+
+@pytest.mark.parametrize("malformed", [
+    None, [], 42, "not-an-object", {"answers": []}, {"answers": {"action": []}},
+    {"answers": {"action": {"choice": "gui", "probabilities": ["gui", "mcp"], "confidence": 1}}},
+    {"answers": {"action": {"choice": "gui", "probabilities": {"gui": 1, "mcp": 0}, "confidence": True}}},
+    {"answers": {"action": {"choice": "gui", "probabilities": {"gui": True, "mcp": 0}, "confidence": 1}}},
+    {"answers": {"action": {"choice": [], "probabilities": {"gui": 1, "mcp": 0}, "confidence": 1}}},
+    {"model": [], "answers": {"action": {"choice": "gui", "probabilities": {"gui": 1, "mcp": 0},
+                                        "confidence": 1}}},
+    {"answers": {"action": {"choice": "gui", "probabilities": {"gui": 1, "mcp": 0},
+                            "confidence": 10**400}}},
+    {"answers": {"action": {"choice": "gui", "probabilities": {"gui": 10**400, "mcp": 0},
+                            "confidence": 1}}},
+])
+def test_malformed_jev_http_response_is_sanitized_and_never_executes(malformed):
+    from cua_jev.guard import ActionGuard
+    from cua_jev.registry import ExecutorRegistry
+    from cua_jev.runtime import AgentRuntime
+
+    policy = JevPolicy(api_key="fixture-key", retries=0,
+                       client=httpx.Client(transport=httpx.MockTransport(
+                           lambda _request: httpx.Response(200, content=json.dumps(malformed),
+                                                         headers={"content-type": "application/json"}))))
+    registry = ExecutorRegistry()
+    emitted = []
+    registry.register(Channel.GUI, lambda *args: emitted.append(args))
+    runtime = AgentRuntime(policy=policy, guard=ActionGuard(), executors=registry, require_jev=True)
+    with pytest.raises(PolicyError, match="invalid Jev choice response; no action executed"):
+        runtime.step(Observation("fixture", "choose", {}), candidates())
+    assert emitted == []
+    assert runtime.metrics["policy_calls"] == runtime.metrics["policy_errors"] == 1
+    assert policy.metrics["calls"] == policy.metrics["attempts"] == 1
+    assert "fallback" not in policy.last_exchange

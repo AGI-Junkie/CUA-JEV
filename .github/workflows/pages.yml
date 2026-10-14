@@ -1,8 +1,7 @@
 name: Publish showcase
 
 on:
-  push:
-    branches: [main]
+  # Publishing is separate from CI and requires an explicit manual request.
   workflow_dispatch:
 
 permissions:
@@ -20,6 +19,8 @@ jobs:
       pages: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

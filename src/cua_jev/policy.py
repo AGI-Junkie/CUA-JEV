@@ -103,7 +103,8 @@ class JevPolicy:
         ).hexdigest()
         started = time.perf_counter()
         self.metrics["calls"] += 1
-        result = None
+        missing = object()
+        result = missing
         safe_error = "Jev request failed"
         attempts = 0
         for attempt in range(self.retries + 1):
@@ -149,7 +150,7 @@ class JevPolicy:
                     continue
         latency_ms = (time.perf_counter() - started) * 1000
         self.metrics["latency_ms"] += latency_ms
-        if result is None:
+        if result is missing:
             self.metrics["transport_failures"] += 1
             self.last_exchange = {
                 "request": body, "request_hash": request_hash, "attempts": attempts,
@@ -162,23 +163,34 @@ class JevPolicy:
             "attempts": attempts,
             "response": result,
             "latency_ms": latency_ms,
-            "usage": result.get("usage", {}),
+            "usage": result.get("usage", {}) if isinstance(result, dict) else {},
         }
         try:
+            if not isinstance(result, dict) or not isinstance(result.get("answers"), dict):
+                raise ValueError
             answer = result["answers"]["action"]
+            if not isinstance(answer, dict):
+                raise ValueError
             selected = answer["choice"]
             probabilities = answer["probabilities"]
             confidence = answer["confidence"]
-            if selected not in criteria or set(probabilities) != set(criteria):
+            if (not isinstance(selected, str) or selected not in criteria
+                    or not isinstance(probabilities, dict) or set(probabilities) != set(criteria)
+                    or type(confidence) not in (int, float) or not 0 <= confidence <= 1
+                    or not math.isfinite(confidence)):
                 raise ValueError
-            if not all(type(v) in (float, int) and math.isfinite(v) for v in probabilities.values()):
+            model = result.get("model", self.model)
+            if not isinstance(model, str) or not model.strip():
+                raise ValueError
+            if not all(type(v) in (float, int) and 0 <= v <= 1 and math.isfinite(v)
+                       for v in probabilities.values()):
                 raise ValueError
             return Decision(
                 observation_id=observation.observation_id,
                 candidate_id=selected,
                 probabilities={key: float(value) for key, value in probabilities.items()},
                 confidence=float(confidence),
-                model=str(result.get("model", self.model)),
+                model=model,
                 latency_ms=latency_ms,
             )
         except (KeyError, TypeError, ValueError):
