@@ -1,0 +1,147 @@
+{
+  "scope": "controlled local fixture only; not arbitrary Windows/apps/games",
+  "layouts": [
+    {
+      "initial_layout": "columns",
+      "layout_changed_between_actions": true,
+      "first_button_bounds": [
+        121,
+        539,
+        295,
+        595
+      ],
+      "final_button_bounds": [
+        306,
+        481,
+        874,
+        537
+      ],
+      "browser": "real headless Chromium",
+      "observer": "DOM semantics stand in for UIA; not VLM",
+      "models": "simulated planner and Jev HTTP responses; no paid calls",
+      "planner_calls": 1,
+      "planner_latency_ms": 0.028,
+      "jev_logical_calls": 2,
+      "jev_transport_attempts": 2,
+      "jev_latency_ms": [
+        0.625,
+        0.438
+      ],
+      "elapsed_ms": 1244.795,
+      "verified_steps": 2,
+      "independent_dom_postcondition": "Saved locally: Cloud acceptance note",
+      "mouse_keyboard_inputs": [
+        {
+          "operation": "click",
+          "x": 329.5,
+          "y": 488.0
+        },
+        {
+          "operation": "hotkey",
+          "keys": [
+            "ctrl",
+            "a"
+          ]
+        },
+        {
+          "operation": "text",
+          "length": 21
+        },
+        {
+          "operation": "click",
+          "x": 590.0,
+          "y": 509.0
+        }
+      ],
+      "api_choices": [
+        {
+          "offered": [
+            "option_0_uia",
+            "option_0_gui",
+            "option_1_gui"
+          ],
+          "selected": "option_0_gui"
+        },
+        {
+          "offered": [
+            "option_1_gui"
+          ],
+          "selected": "option_1_gui"
+        }
+      ],
+      "external_network_requests": 0,
+      "paid_api_calls": 0
+    },
+    {
+      "initial_layout": "stacked",
+      "layout_changed_between_actions": true,
+      "first_button_bounds": [
+        306,
+        763,
+        874,
+        819
+      ],
+      "final_button_bounds": [
+        642,
+        539,
+        816,
+        595
+      ],
+      "browser": "real headless Chromium",
+      "observer": "DOM semantics stand in for UIA; not VLM",
+      "models": "simulated planner and Jev HTTP responses; no paid calls",
+      "planner_calls": 1,
+      "planner_latency_ms": 0.024,
+      "jev_logical_calls": 2,
+      "jev_transport_attempts": 2,
+      "jev_latency_ms": [
+        0.381,
+        0.342
+      ],
+      "elapsed_ms": 1041.327,
+      "verified_steps": 2,
+      "independent_dom_postcondition": "Saved locally: Cloud acceptance note",
+      "mouse_keyboard_inputs": [
+        {
+          "operation": "click",
+          "x": 590.0,
+          "y": 712.0
+        },
+        {
+          "operation": "hotkey",
+          "keys": [
+            "ctrl",
+            "a"
+          ]
+        },
+        {
+          "operation": "text",
+          "length": 21
+        },
+        {
+          "operation": "click",
+          "x": 729.0,
+          "y": 567.0
+        }
+      ],
+      "api_choices": [
+        {
+          "offered": [
+            "option_0_uia",
+            "option_0_gui",
+            "option_1_gui"
+          ],
+          "selected": "option_0_gui"
+        },
+        {
+          "offered": [
+            "option_1_gui"
+          ],
+          "selected": "option_1_gui"
+        }
+      ],
+      "external_network_requests": 0,
+      "paid_api_calls": 0
+    }
+  ]
+}
