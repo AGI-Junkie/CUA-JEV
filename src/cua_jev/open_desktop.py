@@ -734,7 +734,15 @@ class OpenDesktopTask:
                 },
             )
         if candidate.arguments["operation"] == "fill":
-            wrapper = self._handles.get(candidate.arguments["ref"])
+            matching = [
+                control
+                for control in after.controls
+                if all(
+                    getattr(control, key) == candidate.arguments[key]
+                    for key in ("name", "control_type", "automation_id")
+                )
+            ]
+            wrapper = self._handles.get(matching[0].ref) if len(matching) == 1 else None
             read_value = getattr(wrapper, "get_value", None)
             passed = callable(read_value) and read_value() == candidate.arguments["value"]
         else:

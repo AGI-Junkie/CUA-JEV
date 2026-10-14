@@ -193,3 +193,16 @@ def test_navigation_focuses_without_clicking_and_verifies_declared_effect():
     assert receipt.success
     assert focused == [True]
     assert item._verify_effect(candidate, receipt).passed
+
+
+def test_fill_verifier_rebinds_semantic_field_after_ref_reorder():
+    window = FakeWindow()
+    item = task(window, FakeDesktopPlanner([{"ref": "c0", "operation": "fill", "value": "Ada"}]))
+    observation = item.observe(())
+    candidate = item.candidates(observation, ())[0]
+    receipt = item(candidate, observation.observation_id, "fill-reorder")
+    window.controls.reverse()
+    assert item._verify_effect(candidate, receipt).passed
+    window.controls[1].value = "wrong"
+    window.controls[0].value = "Ada"
+    assert not item._verify_effect(candidate, receipt).passed
